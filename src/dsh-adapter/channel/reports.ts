@@ -6,6 +6,8 @@ import { collectAdapterDiagnostics } from '../../adapter/kernel/diagnostics.js'
 import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import { fetchBalance } from '../../deepseekBalance.js'
+import { fetchQuotaSnapshot } from '../../quota/fetch.js'
+import { resolveQuotaKeys } from '../../quota/keys.js'
 import { t } from '../../i18n.js'
 import { credentialRefDeclared, dshHomeDir } from '../../utils/credentials.js'
 import { homeDir } from '../../utils/paths.js'
@@ -43,6 +45,30 @@ export function createReportActions(ctx: Context, deps: {
     }
     if (!current(capture)) return { ok: false as const, reason: 'network' as const }
     return fetchBalance(apiKey || process.env.DEEPSEEK_API_KEY || '')
+  }
+
+  const quotaInfo = async () => {
+    const capture = deps.capture()
+    const credentials = ctx.get('credentials') as { resolve(ref: string): Promise<{ value: string } | undefined> } | undefined
+    const resolveKey = async (...refs: string[]): Promise<string | undefined> => {
+      for (const ref of refs) {
+        try {
+          const value = (await credentials?.resolve(ref))?.value
+          if (value !== undefined && value.trim() !== '') return value.trim()
+        } catch { /* env/auth-file fallback */ }
+      }
+      return undefined
+    }
+    const files = resolveQuotaKeys()
+    const keys = {
+      ollama: await resolveKey('OLLAMA_API_KEY') ?? files.ollama,
+      opencodeGo: await resolveKey('OPENCODE_GO_API_KEY', 'OPENCODE_API_KEY') ?? files.opencodeGo,
+      commandCode: await resolveKey('COMMANDCODE_API_KEY', 'COMMAND_CODE_API_KEY', 'CMD_API_KEY') ?? files.commandCode,
+      openrouter: await resolveKey('OPENROUTER_API_KEY') ?? files.openrouter,
+      openrouterManagement: await resolveKey('OPENROUTER_MANAGEMENT_KEY') ?? files.openrouterManagement,
+    }
+    if (!current(capture)) return { providers: [], fetchedAt: Date.now() }
+    return fetchQuotaSnapshot(keys)
   }
 
   const mcpStatus = (): string[] => {
@@ -173,5 +199,5 @@ export function createReportActions(ctx: Context, deps: {
     }, pluginManagerOf(ctx))
   }
 
-  return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo }
+  return { balanceInfo, quotaInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo }
 }

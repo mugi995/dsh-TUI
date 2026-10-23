@@ -791,6 +791,7 @@ export function attachDshExtensions(
     listSkills: sessionMetadataActions.listSkills,
     describeCredential: sessionMetadataActions.describeCredential,
     balanceInfo: reportActions.balanceInfo,
+    quotaInfo: reportActions.quotaInfo,
     sideQuestion: sessionMetadataActions.sideQuestion,
     cachedSessions: sessionMetadataActions.cachedSessions,
     listSessions: sessionMetadataActions.listSessions,

@@ -65,6 +65,21 @@ const check = (name: string, ok: boolean): void => {
   check('1c. 换模型的那轮重新标注', summaries[2]?.turnUsage?.noteModel === true && summaries[2]?.turnUsage?.model === 'glm-5.3-flash')
   check('1d. 账本数据照采（与渲染开关无关）', rig.state.turnUsage?.input === 13)
 }
+{
+  // DSH settles a message with its embedded chunk stream; the translator
+  // hands the first→last span over as `decodeMs`, and the summary records
+  // the rate (100 tokens / 2.5s = 40 tok/s).
+  const rig = createProjectorHarness()
+  rig.apply([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1_000 },
+    { type: 'step.start', turn: 1, step: 1 },
+    { type: 'assistant.message', seq: 1, anchor: 'a1', turn: 1, step: 1, attemptId: 'a1', time: 4_000, model: 'glm-5.3', blocks: [{ type: 'text', text: 't1' }], usage: { input: 10, output: 100 }, decodeMs: 2_500, canonical: true },
+    { type: 'step.end', turn: 1, step: 1 },
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 4_000 },
+  ] as never)
+  const summary = rig.state.rows.find(row => row.kind === 'turn-summary')?.turnUsage
+  check('1e. 嵌入 stream 的 decode 跨度进入摘要（40 tok/s）', summary?.decodeTps === 40, `decodeTps=${summary?.decodeTps}`)
+}
 
 // ── 2/3/4. Render: gate, shape, alignment, model silence ─────────────────
 const COLS = 100
@@ -90,7 +105,7 @@ const summaryRow = (id: number, over: Record<string, unknown> = {}): Record<stri
   id,
   kind: 'turn-summary',
   text: '',
-  turnUsage: { input: 0, output: 196, cacheRead: 0, cacheWrite: 0, cacheKnown: false, retries: 0, durationMs: 13_000, model: 'glm-5.3', noteModel: true, outcome: 'completed', ...over },
+  turnUsage: { input: 0, output: 196, cacheRead: 0, cacheWrite: 0, cacheKnown: false, retries: 0, durationMs: 13_000, decodeTps: 42.5, model: 'glm-5.3', effort: 'max', noteModel: true, outcome: 'completed', ...over },
 })
 const listNode = (rows: Array<Record<string, unknown>>, turnUsageRow: boolean): React.ReactNode =>
   React.createElement(MessageList, {
@@ -116,9 +131,20 @@ const listNode = (rows: Array<Record<string, unknown>>, turnUsageRow: boolean): 
     React.createElement((): React.ReactNode => React.createElement(React.Fragment, null, RawMode(), listNode(rows, false))),
     { stdout: new FakeStdout(term) as unknown as NodeJS.WriteStream, stdin: new Input() as unknown as NodeJS.ReadStream, exitOnCtrlC: false, patchConsole: false },
   )
-  await settled((): boolean => viewportLines(term, ROWS).some(line => line.includes('回答正文')))
+  const offOk = await settled((): boolean => viewportLines(term, ROWS).some(line =>
+    line.includes('glm-5.3 / max') && line.includes('13s') && line.includes('42.5 tok/s')))
   const offLines = viewportLines(term, ROWS)
-  check('2. 默认关：零回合摘要行上屏', offLines.every(line => !line.includes('↑') || !line.includes('↓')))
+  check('2. 默认关：紧凑摘要行（模型 / effort · 时长 · decode tok/s）上屏', offOk)
+  check('2b. 默认关：完整账本（↑/↓）仍隐藏',
+    offLines.every(line => !line.includes('↑') || !line.includes('↓')))
+  {
+    const offRow = offLines.find(line => line.includes('42.5 tok/s'))
+    const at = offRow?.indexOf('glm-5.3') ?? -1
+    check('2c. 默认关：紧凑摘要左对齐', at >= 0 && at <= 4, JSON.stringify(offRow))
+    const bodyAt = offLines.findIndex(line => line.includes('回答正文'))
+    const sumAt = offLines.findIndex(line => line.includes('42.5 tok/s'))
+    check('2d. 摘要与正文之间隔一行空行', bodyAt >= 0 && sumAt - bodyAt === 2, `${bodyAt}/${sumAt}`)
+  }
   instance.rerender(
     React.createElement((): React.ReactNode => React.createElement(React.Fragment, null, RawMode(), listNode(rows, true))),
   )
@@ -126,7 +152,8 @@ const listNode = (rows: Array<Record<string, unknown>>, turnUsageRow: boolean): 
   const onLines = viewportLines(term, ROWS)
   const rowLine = onLines.find(line => line.includes('↓196'))
   if (process.env.DEBUG_ROW === '1' && rowLine !== undefined) console.log('ROWLINE len=' + rowLine.trimEnd().length + ' [' + rowLine + ']')
-  check('3a. 开：摘要行出现', onOk && rowLine !== undefined)
+  check('3a. 开：完整账本行出现', onOk && rowLine !== undefined)
+  check('3e. 开：账本也带 decode tok/s', rowLine !== undefined && rowLine.includes('42.5 tok/s'))
   check('3b. 无「本轮」前缀', rowLine !== undefined && !rowLine.includes('本轮'))
   // Right-alignment evidence: the emblem's last painted cell sits near the
   // RIGHT margin (a left-aligned row would end ~25 cols in; the 2-cell

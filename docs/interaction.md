@@ -797,6 +797,7 @@ Claude 后端的审批来自 CLI：CLI 给出建议时多一个「始终允许�
 
 - `/context`、`/status`、`/cost`。
 - `/balance`：DeepSeek 官方余额，摘要行 + hover 明细，点击刷新。
+- `/quota`：Ollama Cloud、OpenCode Go、Command Code 的订阅额度（只显示接口实际返回的余额/百分比/重置时间）。
 - `/config`、`/doctor`、`/init`、`/agents`。
 - `/jobs`：后台任务面板，状态/时长/退出码，`k` 停止；分栏开启且宽度足够时改为打开右栏面板，窄屏 / inline 回退整屏。
 - `/settings`。

@@ -33,10 +33,20 @@ import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
 const { Terminal: XTerm } = xtermHeadless
-import { render } from '../lib/types/ui.js'
-import { Chat } from '../lib/types/screens/Chat.js'
-import { setLang } from '../lib/types/i18n.js'
-import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
+// Isolate persisted UI prefs (vim mode, status fields, minimal UI): this test
+// pins the default prompt/vim layout, not the developer's ~/.dsh-tui.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'verify-vim-mode-'))
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+}
+const { render } = await import('../lib/types/ui.js')
+const { Chat } = await import('../lib/types/screens/Chat.js')
+const { setLang } = await import('../lib/types/i18n.js')
+const { settle, settled, sleep, viewportLines } = await import('./lib/term-test.mjs')
 
 let failed = 0
 function check(name, ok, extra = '') {

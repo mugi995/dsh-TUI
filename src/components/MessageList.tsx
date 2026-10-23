@@ -20,7 +20,7 @@ import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
-import { TurnUsageRow } from './TurnUsageRow.js'
+import { TurnSummaryRow, TurnUsageRow } from './TurnUsageRow.js'
 import { LogoV2 } from './LogoV2.js'
 import type { Brand } from '../branding.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -640,11 +640,6 @@ export function MessageList({
       : thinkingVisible
         ? sliced.slice()
         : sliced.filter(row => row.kind !== 'reasoning')
-    // Turn-usage rows (settings `dsh-tui.turnUsageRow`, default off): a
-    // pure PRESENTATION gate — filtering here (not render-null) keeps the
-    // row out of the window entirely, so no cached height or mounted node
-    // survives the toggle. The ledger data itself is collected regardless.
-    if (!turnUsageRow) out = out.filter(row => row.kind !== 'turn-summary')
     // --- consecutive-job groups ------------------------------------------
     // A batch of run_in_background calls lands as N adjacent job cards (the
     // projection pushes the whole roster in one sync) and EVERY card pays
@@ -1611,6 +1606,7 @@ export function MessageList({
               toolLiveOutputDropped={tool?.liveOutputDropped}
               fullscreen={fullscreen}
               turnUsage={row.turnUsage}
+              turnUsageRow={turnUsageRow}
               subagent={subagent}
               job={job}
               jobGroup={jobGroup}
@@ -1715,6 +1711,8 @@ type MemoRowProps = {
   /** Turn-summary payload (kind === 'turn-summary'); set-once immutable
    *  ref created at turn.end, so a plain ref compare is complete. */
   turnUsage: TurnUsageSummary | undefined
+  /** Show the full turn ledger instead of the compact answer summary. */
+  turnUsageRow: boolean
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
@@ -1802,6 +1800,7 @@ function TranscriptRow({
   toolLiveOutputDropped,
   fullscreen,
   turnUsage,
+  turnUsageRow,
   subagent,
   job,
   jobGroup,
@@ -2048,15 +2047,26 @@ function TranscriptRow({
         </Box>
       )
     case 'turn-summary':
-      // The turn's closing ledger: a quiet RIGHT-aligned
-      // emblem — metadata does not lead the reading flow. No top margin, it
-      // belongs to the block above. width="100%" is what makes flex-end mean
-      // the transcript's right margin (an auto-width row has nothing to push
+      // Default: the compact answer summary is LEFT-aligned — it reads as the
+      // answer's closing line, under the text it summarizes. The opt-in full
+      // ledger keeps the quiet RIGHT-aligned emblem (metadata does not lead
+      // the reading flow). One blank row separates the summary from the
+      // answer body above. width="100%" is what makes flex-end mean the
+      // transcript's right margin (an auto-width row has nothing to push
       // against).
       if (turnUsage === undefined) return null
       return (
-        <Box paddingLeft={2} width="100%" flexDirection="row" justifyContent="flex-end" ref={ref}>
-          <TurnUsageRow usage={turnUsage} />
+        <Box
+          marginTop={1}
+          paddingLeft={2}
+          width="100%"
+          flexDirection="row"
+          justifyContent={turnUsageRow ? 'flex-end' : 'flex-start'}
+          ref={ref}
+        >
+          {turnUsageRow
+            ? <TurnUsageRow usage={turnUsage} />
+            : <TurnSummaryRow usage={turnUsage} model={model} />}
         </Box>
       )
     case 'local':

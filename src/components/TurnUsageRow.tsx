@@ -31,15 +31,52 @@ export function turnUsageParts(usage: TurnUsageSummary, options: { readonly mode
   return parts
 }
 
+/** One decimal, `.0` dropped: `42 tok/s`, `42.5 tok/s`. */
+function formatTps(tps: number): string {
+  const rounded = Math.round(tps * 10) / 10
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)} tok/s`
+}
+
 /**
- * The quiet right-aligned line that closes a turn. It hugs the right margin
- * one notch dimmer than the thinking timer, and names the model only when it
- * changed since the previous turn (`noteModel`, decided at projection time).
- * Formatting happens at render time so a language switch relabels history;
- * the payload itself is immutable, which is what the per-row memo compares.
+ * The always-on answer summary that closes a streaming turn: the model (with
+ * its reasoning effort), the whole turn's wall-clock span, and the decode
+ * speed. Unlike the ledger below it never hides the model — it is the one
+ * line a reader uses to tell what answered, at which effort, how long it
+ * took, and how fast it decoded.
+ */
+export function turnSummaryParts(usage: TurnUsageSummary, fallbackModel: string): string[] {
+  const model = usage.model ?? fallbackModel
+  const route = [model, usage.effort].filter(part => part !== undefined && part !== '').join(' / ')
+  return [
+    ...(route === '' ? [] : [route]),
+    formatDuration(usage.durationMs),
+    usage.decodeTps === undefined ? '— tok/s' : formatTps(usage.decodeTps),
+  ]
+}
+
+export function TurnSummaryRow({ usage, model }: {
+  usage: TurnUsageSummary
+  /** Session model, used when the turn did not report one. */
+  model: string
+}): React.ReactNode {
+  return (
+    <Text color="subtle" wrap="truncate">{turnSummaryParts(usage, model).join(' · ')}</Text>
+  )
+}
+
+/**
+ * The quiet right-aligned ledger (settings `dsh-tui.turnUsageRow`, opt-in).
+ * It hugs the right margin one notch dimmer than the thinking timer, names
+ * the model only when it changed since the previous turn (`noteModel`,
+ * decided at projection time), and appends the turn's decode speed when the
+ * backend streamed one. Formatting happens at render time so a language
+ * switch relabels history; the payload itself is immutable, which is what the
+ * per-row memo compares.
  */
 export function TurnUsageRow({ usage }: { usage: TurnUsageSummary }): React.ReactNode {
+  const parts = turnUsageParts(usage, { model: true })
+  if (usage.decodeTps !== undefined) parts.push(formatTps(usage.decodeTps))
   return (
-    <Text color="subtle" wrap="truncate">{turnUsageParts(usage, { model: true }).join(' · ')}</Text>
+    <Text color="subtle" wrap="truncate">{parts.join(' · ')}</Text>
   )
 }

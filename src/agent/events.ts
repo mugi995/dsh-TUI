@@ -271,7 +271,7 @@ export type AgentEvent =
    * record of the attempt (provisional content they omit is removed);
    * `turn`/`step` are absent only on legacy history that predates them.
    */
-  | { readonly type: 'assistant.message'; readonly seq: number; readonly anchor: string; readonly turn?: number; readonly step?: number; readonly attemptId: string; readonly time: number; readonly model?: string; readonly blocks: readonly AssistantBlock[]; readonly images?: readonly ImageRef[]; readonly usage?: UsageDelta; readonly interrupted?: true; readonly canonical: boolean; readonly parentCallId?: string }
+  | { readonly type: 'assistant.message'; readonly seq: number; readonly anchor: string; readonly turn?: number; readonly step?: number; readonly attemptId: string; readonly time: number; readonly model?: string; readonly blocks: readonly AssistantBlock[]; readonly images?: readonly ImageRef[]; readonly usage?: UsageDelta; readonly interrupted?: true; readonly canonical: boolean; /** First→last streamed chunk span (ms) from the durable V3 stream, when present. */ readonly decodeMs?: number; readonly parentCallId?: string }
   /** One model call's usage, reported separately from its reply. Books tokens
    *  and cost by seq without creating or changing transcript rows. */
   | { readonly type: 'usage'; readonly seq: number; readonly turn: number; readonly step?: number; readonly usage: UsageDelta; readonly time: number; readonly model?: string }

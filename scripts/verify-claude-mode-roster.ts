@@ -383,7 +383,12 @@ const fakeSettings = (defaultMode: unknown) => ({
     const chatSrc = readRepo('../src/screens/Chat.tsx')
     const lineSrc = readRepo('../src/screens/StatusLine.tsx')
     check('model display: every Chat model prop prefers the display name', !chatSrc.includes('model={channel.model}') && (chatSrc.match(/model=\{channel\.modelDisplay \?\? channel\.model\}/g) ?? []).length === 4)
-    check('model display: the footer and the detail line prefer the display name', (lineSrc.match(/channel\.modelDisplay \?\? channel\.model/g) ?? []).length === 2)
+    // The footer's model segment and its hover detail moved to the prompt's
+    // top-border label: Chat carries the one display-name read now, and
+    // StatusLine must not grow a second one back.
+    check('model display: the composer border label prefers the display name',
+      (chatSrc.match(/model: channel\.modelDisplay \?\? channel\.model/g) ?? []).length === 1
+      && (lineSrc.match(/channel\.modelDisplay \?\? channel\.model/g) ?? []).length === 0)
   } finally {
     process.env.CLAUDE_CONFIG_DIR = previousConfigDir
     try { rmSync(withEnvDir, { recursive: true, force: true }) } catch { /* best effort */ }

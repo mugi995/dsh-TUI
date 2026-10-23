@@ -364,6 +364,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/status` | none | model+effort, working/idle, session id, dir+git branch, token, cache hit rate, context percentage, session title |
 | `/cost` | none | token usage + cache hit rate + a session estimate (subagent usage included) split into main/subagent; unofficial or unlisted models show tokens only and are marked unpriced (**an estimate — the platform bill is authoritative**) |
 | `/balance` | none | DeepSeek official account balance (free read-only API): summary line + hover detail (same session-estimate split: main/subagent/unpriced), click refresh, `×` close |
+| `/quota` | none (needs `OLLAMA_API_KEY`, `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`, `COMMANDCODE_API_KEY`, `OPENROUTER_API_KEY`) | Subscription quota detail: Ollama Cloud (included balance/allowance, purchased credits), OpenCode Go (5-hour/weekly/monthly percentages), Command Code (credits + 5-hour/weekly windows), OpenRouter (account credits / key limit / budget window), and an immediate refresh of the always-on rows beside the ctx/cache line; prints only fields each API returned and names a failed service instead of hiding the others |
 | `/config` | none | config sources: `cordis.patch.yml` path, launch method, model routing |
 | `/doctor` | none | environment check |
 | `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
@@ -559,6 +560,13 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
+**End of an answer — model / duration / decode tok/s** (always on)
+
+- Each turn closes with a left-aligned `model / effort · 12.4s · 42 tok/s` line, one blank row below the answer (the `/ effort` part is omitted when the turn recorded none).
+- decode tok/s is measured over the streaming decode span (turns with no measured span show `— tok/s`).
+- `/settings → Turn usage row` (`turnUsageRow`, off by default) switches that line to the full ledger
+  (tokens in/out, cache, retries) with decode tok/s appended.
+
 **Long single-line fold** (default on)
 
 - Text with **a single line over 1000 chars** folds into
@@ -568,7 +576,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 ### 5.2 Bottom status bar (three rows under the input)
 
-**Row 1 — context segment bar** (`/settings → statusBar.contextBar`, default on)
+**Row 1 — context bar** (`/settings → statusBar.contextBar`, default on)
 
 - Colored by content type (system / prompt / assistant / thinking / tools).
 - Colored by content type (system / prompt / assistant / thinking / tools). **The used span's length is
@@ -582,34 +590,66 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - The hover legend reports those same shares, attributed to the occupancy, so **the five segments plus
   free add up to the window** (`1.2k`-style abbreviations cost at most half a unit each) instead of
   reporting a second, smaller total. The estimates themselves **never** feed the occupancy total — that
-  comes from the ctx reading below.
-- When no content category can be attributed, the bar keeps one used block and both the bar and ctx
-  hover details report its measured `used` count instead of five zero categories.
-- The only text on the bar is the right-edge reading `13k/64k 19.5%` (narrow screens show only `19.5%`).
-- The reading colors by usage: <80% gray-blue, **≥80% amber, ≥95% red**.
+  comes from the ctx reading under the bar (Row 1b).
+- When no content category can be attributed, the bar keeps one used block and its hover detail reports
+  the measured `used` count instead of five zero categories.
+- The bar carries no text at all now (the numbers live in Row 1b directly below); the used segments
+  still color by content type.
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).
+- The look is switchable: `/settings → Context bar style` (`statusBar.contextBarStyle`) `blocks` draws a
+  single-colour `█` (used) / `░` (free) character gauge; the hover legend keeps only names and token
+  counts (there are no fills for chips to name). `segments` (the default) keeps the look described above.
+
+**Row 1b — ctx / cache readout** (`statusBar.contextUsage` / `statusBar.cache`, default on)
+
+- One line directly under the gauge: `ctx 13k/64k 19.5% cache 2.4%`; while the occupancy is unknown,
+  `ctx --/-- 0% cache 0%`.
+- The occupancy is the SAME value the gauge, the working line's pressure prefix, `/tokens`, `/status`
+  and the context-low warning read: the harness's own `contextPressure` projection (`projectedTokens ??
+  pressureTokens`) wins; a bare `cordis.yml` composition without the meter falls back to the last
+  request's billed usage. A compaction or a rejected request shows up immediately.
+- The two switches gate the ctx and cache parts; turning both off hides the whole line. The old footer
+  ctx / cache fields are gone.
+
+**Row 1c — subscription quotas (always on, right of the ctx/cache line)**
+- Ollama Cloud / OpenCode Go / Command Code / OpenRouter quota rows sit in the right column of the ctx/cache
+  line whenever they have data (`statusBar.quota`, on by default; hidden in the minimal UI).
+- Credit amounts stay numeric (`$72.50/$100`); each window's usage is a 10-cell `[##########]0%` bar with
+  a whole-number percentage.
+- Only fields the API actually returned are shown; an unconfigured or failing service takes no row —
+  `/quota` prints its detail.
+- Keys come from the DSH credentials store or env (`OLLAMA_API_KEY`, `OPENCODE_GO_API_KEY`,
+  `COMMANDCODE_API_KEY`, `OPENROUTER_API_KEY`; OpenRouter account credits also accept an optional
+  `OPENROUTER_MANAGEMENT_KEY`, while a normal key shows its key limit/budget only); the rows refresh every five minutes, and `/quota` refreshes immediately.
+
+**Prompt top border — provider / model / effort (left), cwd (right)**
+
+- `/settings → statusBar.model` (default on) draws `╭─[provider · model / effort]────` at the
+  top-left of the prompt border; `statusBar.thinking` (default on) controls the effort half.
+- Clicking the **provider** part opens that provider's model list in `/model`; clicking the **model**
+  part opens the recently-used list; clicking the effort part opens `/effort`. Clicking the model or
+  effort readout again closes the picker, so closing does not require Esc.
+- On narrow terminals the label drops the provider, then the effort, then shortens the model id. The
+  session-title label, when enabled, sits to its left.
+- The right end shows the working directory in brackets (`[~/project]`, home collapsed to `~`; narrow
+  terminals keep the path's tail). Hidden when `statusBar.cwd` is off.
 
 **Row 2 — status field row** (each field toggled separately, see `/settings`)
-- left group: model → TPS → thinking → mode → ctx (**context occupancy** `19.5% (13k/64k)`: the SAME
-  value the segmented bar, the working line's pressure prefix, `/tokens`, `/status` and the context-low
-  warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
-  pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
-  up immediately instead of waiting for one successful request; a bare `cordis.yml` composition without
-  the meter falls back to the last request's billed usage) → cache hit rate → tokens (`1.2k→340` input→output) →
+- left group: TPS → mode → tokens (`1.2k→340` input→output) →
   cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
-- right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (basename only in compact mode) → session title → short session ID (`#` + first 8 chars, for `--resume`)
+- right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → session title → short session ID (`#` + first 8 chars, for `--resume`); the working directory lives at the prompt's top-right only
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
 - **Per-field control and order**: `/settings → Status bar → Plugin field list` (`statusBar.pluginFieldsOrder`) lists the fields in their three slot groups for individual ticking, with an `Advanced` row at the bottom for ordering. The value looks like `build,ci;git;pet` — exactly three `;`-separated groups, group index = slot, order inside a group = display order; a listed key follows its group (overriding the plugin-declared slot). Empty = show none; `*` (default) = all of them (future registrations included, in their declared slots and registration order). Entering the advanced row from `*` pre-fills the three-group skeleton, and saving it untouched keeps the mode; once a list is fixed, newly registered fields stay hidden until ticked.
-- Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, contextBar, pluginFields.
+- Default on: compact, model, thinking, cwd, contextUsage, cache, quota, cost, goal, contextBar, pluginFields.
 - Default off: tokens, tps, gitBranch, sessionTitle, sessionId, mode, activity, trajectory.
 
 **Row 3 — hints / working activity + mini trace bar**
 - Idle shows `? for shortcuts`, running `esc to interrupt`, selecting `esc to return to input`.
-- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red (the same occupancy reading as the ctx field).
+- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red (the same occupancy reading as Row 1b).
 - Right-side **mini trace bar MiniWake** (`statusBar.trajectory`, default off): session projected as density glyphs, color per channel, failures red;
   degrades/hides on narrow screens.
 
@@ -627,7 +667,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | lang | UI language zh/en (locked when DSH_TUI_LANG is pinned) |
 | fullscreen | fullscreen mode (default on); takes effect after `/restart` |
 | launchpad | launchpad landing page (default on): an ordinary launch starts on the launchpad where the first sentence gets typed; off boots straight into the chat page (launches with a `--resume` target are unaffected — they open their conversation directly either way). Takes effect after `/restart` |
-| minimal | Minimal UI (default off): hide the header splash, emoji glyphs and decorative colors, and trim the footer to model + cwd; code highlight and tool colors stay. **An interface switch** with no effect on model capability — do not confuse it with the kernel Minimal agent preset in `/preset` |
+| minimal | Minimal UI (default off): hide the header splash, emoji glyphs and decorative colors, and trim the footer to cwd (the model readout moves to the prompt's top border); code highlight and tool colors stay. **An interface switch** with no effect on model capability — do not confuse it with the kernel Minimal agent preset in `/preset` |
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | imageBacking | image backing (default `transparent`, same **Rendering** topic as the row above): what sits behind chat photos and illustrations. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background for smooth soft edges. Applies immediately |
 | codeFrameStyle | code-frame shape (default `light`): `light` uses an open left rail; `full` adds a continuous right wall and bottom edge. Very narrow terminals show a plain code fence. Applies immediately |
@@ -643,7 +683,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
 | smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
 | toolBackground | tool-card background emphasis: none / subtle / strong |
-| turnUsageRow | Turn-usage row (default off): show a per-turn summary of tokens, cache, duration and retries; `/tokens`, `/status` and the footer token hover are unaffected |
+| turnUsageRow | Turn-usage row (default off): the answer-end summary is the compact `model / effort · duration · decode tok/s` line; turning it on switches to the full ledger (tokens, cache, retries) plus decode tok/s. `/tokens`, `/status` and the footer token hover are unaffected |
 | mermaidDiagrams | Mermaid diagrams (default on): ```` ```mermaid ```` blocks render as character diagrams, forming while streaming; too-wide or unsupported types keep source with the required columns. Applies immediately |
 | mathRendering | LaTeX math (default `auto`; lives on the **Formula** subpage of `/settings`): how `$…$` / `\(…\)` inline and `$$…$$` / `\[…\]` / bare display-environment (`\begin{align}` …) block formulas in replies show. `auto` uses the best available renderer (today Unicode text, with fractions and limits stacked in blocks), `image` typesets formulas with MathJax as terminal images when the terminal has graphics — the Kitty graphics protocol (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm) — in the theme's text color (block formulas up to 16 rows; inline formulas as one-row images when a single row can hold them legibly; still-streaming formulas, dimmed thinking, terminals without graphics, formulas too small on one row, and any render failure fall back to Unicode), `unicode` pins Unicode text, `source` keeps the TeX. Unsupported, still-streaming, or too-wide formulas keep their source (a too-wide block first falls back to one line). Prices (`$5`), shell variables (`$HOME`), and `$` in code are left alone. The older `latexMath: false` still means `source`. **Click a formula image** to open the preview card: it re-typesets at twice the cell size, zooms 100–800%, pans, closes on `Esc` or a click outside, and titles itself with the formula's TeX. On Sixel the formulas carry **no backing** (only their strokes), so the terminal background or wallpaper shows through. Illustrations that ship with their own transparent margins — the `whaleGirl` raster — float the same way; photographs, screenshots, and images inside cards still composite onto a colour, because Sixel cannot express soft alpha. Applies immediately |
 | mathImageScale | formula image size (default `auto`; same **Formula** subpage), used with LaTeX math → Image: `auto` matches the body text, `large` / `xlarge` set **display** formulas bigger. Terminal images are drawn one device pixel per pixel, so "bigger" literally means more pixels per stroke — the only sharpness lever there is. Inline formulas are unaffected (they must fit one row). Applies immediately |
@@ -651,7 +691,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
-| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
+| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/contextBarStyle/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; contextBarStyle is the bar look (`segments` colored by content type, the default; `blocks` a single-colour `█`/`░` character gauge); pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
 
 **effortDefault**: when the model lacks that level, drop one level and show a notice; priority settings user layer > the last `/effort`
 (effort.json, the level the last session ran) > cordis `effort` (deployment default) > model default.

@@ -385,13 +385,13 @@ const BASE_CHANNEL = {
     compact: true,
     model: true,
     thinking: false,
-    cwd: true,
+    cwd: false,
     contextUsage: false,
     cache: false,
-    tokens: false,
+    tokens: true,
     cost: false,
     tps: false,
-    gitBranch: false,
+    gitBranch: true,
     sessionTitle: false,
     sessionId: false,
     goal: false,
@@ -490,12 +490,12 @@ const hover = (stdin: FakeStdin, col: number, row: number): void => {
 }
 
 /** The footer's status row: row 0 without the context bar, row 1 with it. */
-const statusRow = (lines: readonly string[], needle = 'MODELX'): string =>
+const statusRow = (lines: readonly string[], needle = '1.2k→34'): string =>
   lines.find(line => line.includes(needle)) ?? ''
 
 /** The status row as the terminal holds it, trailing blank cells intact.
  *  `viewportLines` trims them, and an edge assertion needs to see them. */
-const rawStatusRow = (term: InstanceType<typeof XTerm>, needle = 'MODELX'): string => {
+const rawStatusRow = (term: InstanceType<typeof XTerm>, needle = '1.2k→34'): string => {
   const buffer = term.buffer.active
   for (let y = 0; y < term.rows; y += 1) {
     const line = buffer.getLine(buffer.baseY + y)?.translateToString(false) ?? ''
@@ -522,7 +522,7 @@ async function capture(cols: number, props: Record<string, unknown>, channel = B
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await settled(() => screenHas(rig.term, 'MODELX'))
+  await settled(() => screenHas(rig.term, '1.2k→34'))
   await sleep(120) // 固定窗:pacing 等首帧/卸载落定，无单一可轮询锚点
   const lines = viewportLines(rig.term)
   instance.unmount()
@@ -552,10 +552,9 @@ try {
       row.includes('LTX')
       // `indexOf` is -1 for a missing anchor, so every anchor must be proven
       // present before its position is compared.
-      && row.includes('MODELX') && row.includes('34') && row.includes('uniqdir')
-      && row.indexOf('MODELX') < row.indexOf('LTX')
+      && row.includes('34') && row.includes('main')
       && row.indexOf('LTX') > row.indexOf('34')
-      && row.indexOf('LTX') < row.indexOf('uniqdir'),
+      && row.indexOf('LTX') < row.indexOf('main'),
       JSON.stringify(row))
   }
 
@@ -571,9 +570,8 @@ try {
     }, channelWith({ gitBranch: true, sessionId: true }))
     const row = statusRow(lines)
     check('R3 right-head precedes git/cwd/sessionId',
-      row.includes('HEADX') && row.includes('main') && row.includes('uniqdir') && row.includes('#abcdef01')
+      row.includes('HEADX') && row.includes('main') && row.includes('#abcdef01')
       && row.indexOf('HEADX') < row.indexOf('main')
-      && row.indexOf('HEADX') < row.indexOf('uniqdir')
       && row.indexOf('HEADX') < row.indexOf('#abcdef01'), JSON.stringify(row))
     check('R3 right-tail follows the right group',
       row.includes('TAILX') && row.includes('#abcdef01') && row.indexOf('TAILX') > row.indexOf('#abcdef01'),
@@ -591,9 +589,8 @@ try {
     }, channelWith({ gitBranch: true, sessionId: true }))
     const row = statusRow(lines)
     check('R11 compact: slots keep their group position',
-      row.includes('MODELX') && row.includes('LTX') && row.includes('HEADX')
+      row.includes('LTX') && row.includes('HEADX')
       && row.includes('main') && row.includes('#abcdef01') && row.includes('TAILX')
-      && row.indexOf('MODELX') < row.indexOf('LTX')
       && row.indexOf('LTX') < row.indexOf('HEADX')
       && row.indexOf('HEADX') < row.indexOf('main')
       && row.indexOf('main') < row.indexOf('#abcdef01')
@@ -626,27 +623,15 @@ try {
       },
     )
     try {
-      check('R15 split: status row ready', await settled(() => screenHas(rig.term, 'MODELX')))
+      check('R15 split: status row ready', await settled(() => screenHas(rig.term, '1.2k→34')))
       const row = rawStatusRow(rig.term)
       check('R15 split: slots follow their own groups',
         row.includes('LTX') && row.includes('HEADX') && row.includes('TAILX')
-        && row.includes('main') && row.includes('uniqdir') && row.includes('#abcdef01')
+        && row.includes('main') && row.includes('#abcdef01')
         && row.indexOf('LTX') < row.indexOf('HEADX')
         && row.indexOf('HEADX') < row.indexOf('main')
-        && row.indexOf('main') < row.indexOf('uniqdir')
-        && row.indexOf('uniqdir') < row.indexOf('#abcdef01')
+        && row.indexOf('main') < row.indexOf('#abcdef01')
         && row.indexOf('#abcdef01') < row.indexOf('TAILX'), JSON.stringify(row))
-      // The ctx chip is the trailing element that makes both claims
-      // falsifiable: it belongs to the LEFT group (immediately after the
-      // left-tail field, before right-head), and in compact mode it trails
-      // the whole chain instead (see the seam docs). Order alone is not
-      // enough — ctx at the HEAD of the right group gives the same
-      // `LTX < ctx < HEADX` order at the opposite end of the row, so the
-      // assertion pins the ` · ` adjacency.
-      check('R15 split: ctx keeps the left group',
-        row.includes('ctx')
-        && row.includes('LTX · ctx')
-        && row.indexOf('ctx') < row.indexOf('HEADX'), JSON.stringify(row))
       // …and right-head OPENS the right group. The string order above cannot
       // tell: moving the slot into the left group after ctx keeps every order
       // and `LTX · ctx` intact, and only leaves the flex gap between HEADX and
@@ -721,9 +706,8 @@ try {
       channelWith({ pluginFieldsOrder: 'd;;' }))
     const movedRow = statusRow(moved)
     check('O4 listed group overrides the declared slot',
-      movedRow.includes('DDDX') && movedRow.includes('MODELX') && movedRow.includes('uniqdir')
-      && movedRow.indexOf('DDDX') > movedRow.indexOf('MODELX')
-      && movedRow.indexOf('DDDX') < movedRow.indexOf('uniqdir') && !movedRow.includes('CCCX'),
+      movedRow.includes('DDDX') && movedRow.includes('main')
+      && movedRow.indexOf('DDDX') < movedRow.indexOf('main') && !movedRow.includes('CCCX'),
       JSON.stringify(movedRow))
 
     // O5 — keys missing from the list are hidden.
@@ -784,8 +768,6 @@ try {
         contextBarEnabled: true,
         contextSegments: { system: 1200, prompt: 300, assistant: 4000, thinking: 5000, tools: 2000 },
         contextOccupancy: { usedTokens: 12_500, contextWindow: 64_000 },
-        displayCwd: '/w/' + 'nested/'.repeat(6) + 'uniqdir',
-        cwd: '/w/' + 'nested/'.repeat(6) + 'uniqdir',
       },
     )
     const fields = [
@@ -794,11 +776,12 @@ try {
     ]
     for (const cols of [60, 80, 120, 160]) {
       const lines = await capture(cols, { pluginFields: fields }, barChannel(cols))
-      const row = statusRow(lines, 'ctx')
-      check(`R7 ${cols} cols: footer stays within 3 rows`, lines.slice(3).every(line => line.trim() === ''),
+      const row = statusRow(lines)
+      check(`R7 ${cols} cols: footer stays within 4 rows`, lines.slice(4).every(line => line.trim() === ''),
         JSON.stringify(lines))
-      check(`R7 ${cols} cols: status row keeps its content and ctx`, row.includes('ctx') && row.trim() !== '',
-        JSON.stringify(row))
+      check(`R7 ${cols} cols: status row keeps its content, ctx has its own line`,
+        row.includes('1.2k→34') && lines.some(line => line.includes('ctx ')),
+        JSON.stringify(lines))
     }
   }
 
@@ -810,7 +793,9 @@ try {
       contextOccupancy: { usedTokens: 12_500, contextWindow: 64_000 },
     }))
     check('R8 long field truncates instead of overflowing the row',
-      statusRow(lines, 'ctx').includes('ctx') && lines.slice(3).every(line => line.trim() === ''), JSON.stringify(lines))
+      statusRow(lines, '1.2k→').includes('1.2k→')
+      && lines.some(line => line.includes('ctx '))
+      && lines.slice(3).every(line => line.trim() === ''), JSON.stringify(lines))
   }
 
   // R9 — hover swaps the supplemental row to the plugin detail, and leaving
@@ -884,7 +869,7 @@ try {
       await clickText(rig.stdin, rig.term, 'CLICKME')
       check('R10 the throwing handler replaced the counting one', clicks === 1, `clicks=${clicks}`)
       check('R10 throwing click is reported, not thrown', await settled(() => reported === 'click'), `reported=${reported}`)
-      check('R10 TUI survives the throwing click', screenHas(rig.term, 'CLICKME') && screenHas(rig.term, 'MODELX'))
+      check('R10 TUI survives the throwing click', screenHas(rig.term, 'CLICKME') && screenHas(rig.term, 'main'))
     } finally {
       store.setFieldErrorHandler(undefined)
       instance.unmount()
@@ -923,7 +908,7 @@ try {
       fieldOf('async-click')?.onClick?.()
       check('R14 rejected async click is reported', await settled(() => reported === 'async-click'), `reported=${reported}`)
       check('R14 the process survives an async click rejection',
-        screenHas(rig.term, 'ASYNCX') && screenHas(rig.term, 'MODELX'))
+        screenHas(rig.term, 'ASYNCX') && screenHas(rig.term, 'main'))
     } finally {
       store.setFieldErrorHandler(undefined)
       instance.unmount()

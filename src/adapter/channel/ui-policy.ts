@@ -97,6 +97,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'listSkills': 'read-only',
   'describeCredential': 'read-only',
   'balanceInfo': 'mutate',
+  'quotaInfo': 'mutate',
   'providerSetup': 'read-only',
   'oauthProviderStatuses': 'read-only',
   'backendAuth': 'read-only',

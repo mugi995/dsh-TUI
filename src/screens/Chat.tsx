@@ -20,6 +20,7 @@ import { actionMatches, effectiveComboDisplay, primaryComboString } from '../uti
 import { formatTokens } from '../terminal-utils/format.js'
 import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
+import { formatProject } from '../sessions/format.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import { cleanBlockLines, cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
@@ -72,7 +73,7 @@ import { dueStarModal, markStarAsked, pendingStarMilestone, readUsage, STAR_MILE
 import { TimelineRail } from '../components/TimelineRail.js'
 import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
 import type { TimelineSnapshot } from '../ink/timeline-rail.js'
-import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
+import { normalizeScrollGutter, normalizeStatusBar } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, composerImageRefsForText, type PromptController } from '../components/PromptInput.js'
@@ -93,6 +94,8 @@ import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPi
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
+import { formatQuotaReport } from '../quota/report.js'
+import type { QuotaSnapshot } from '../quota/types.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
@@ -819,6 +822,8 @@ export function Chat({
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
   const [modelsLoading, setModelsLoading] = React.useState(false)
   const modelCatalogGeneration = React.useRef(0)
+  /** Provider the next /model open should land on (prompt border click). */
+  const modelPickerOpenProvider = React.useRef<string | undefined>(undefined)
   /** Provider display identities for the /model tabs; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
   /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
@@ -849,6 +854,22 @@ export function Chat({
       })
     },
   })
+  // 输入框上边框左端的模型读数要 provider 的显示名（catalog 的 `name`）。/model
+  // 不打开时这份目录以前从不加载，标签就只剩路由键；这里启动后取一次。
+  // 能力位声明没有模型目录、或宿主是缺方法的 partial stub 时安静跳过。
+  React.useEffect(() => {
+    if (channel.backendCapabilities?.models === false) return
+    if (providerInfos.length > 0) return
+    const listProviders = channel.listProviders
+    if (typeof listProviders !== 'function') return
+    let alive = true
+    void Promise.resolve(listProviders.call(channel)).then(list => {
+      if (alive) setProviderInfos(list)
+    }).catch(() => {
+      // A catalog that cannot load leaves the route-key fallback in place.
+    })
+    return () => { alive = false }
+  }, [channel, providerInfos.length])
   /** `/skills` 技能目录（issue #204）：null = 注册表快照在途。 */
   const [skillsList, setSkillsList] = React.useState<readonly SkillInfo[] | null>(null)
   /**
@@ -1575,6 +1596,45 @@ export function Chat({
     balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
+  /** /quota: fetch the configured subscriptions and append an adaptive
+   *  report to the transcript. The fetch is read-only; nothing is stored. */
+  const quotaSeqRef = React.useRef(0)
+  const runQuota = React.useCallback(() => {
+    if (typeof channel.quotaInfo !== 'function') {
+      channel.notify(t('quota-fetch-failed'), { color: 'error' })
+      return
+    }
+    const seq = ++quotaSeqRef.current
+    channel.notify(t('quota-fetching'))
+    void channel.quotaInfo().then(snapshot => {
+      if (quotaSeqRef.current !== seq) return
+      setQuotaFooter(snapshot)
+      channel.pushLocal('/quota', formatQuotaReport(snapshot))
+    }).catch(() => {
+      if (quotaSeqRef.current !== seq) return
+      channel.notify(t('quota-fetch-failed'), { color: 'error' })
+    })
+  }, [channel])
+  React.useEffect(() => {
+    quotaSeqRef.current += 1
+  }, [channel.agentId])
+  /** Footer quota rows: fetch once on mount and refresh every five minutes.
+   *  The account data is global, so a session switch does not reset it; a
+   *  failed refresh keeps the previous snapshot instead of blanking the row. */
+  const [quotaFooter, setQuotaFooter] = React.useState<QuotaSnapshot | undefined>(undefined)
+  const quotaSettingOn = normalizeStatusBar(channel.statusBar).quota && channel.minimalUi !== true
+  React.useEffect(() => {
+    if (!quotaSettingOn || typeof channel.quotaInfo !== 'function') return
+    let cancelled = false
+    const load = (): void => {
+      void channel.quotaInfo().then(snapshot => {
+        if (!cancelled) setQuotaFooter(snapshot)
+      }).catch(() => { /* keep the last good snapshot */ })
+    }
+    load()
+    const timer = setInterval(load, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [channel, quotaSettingOn])
   // A side question belongs to its captured session just like a recap. The
   // THREAD stays in memory under its own session id (an archived thread may
   // keep streaming); only the FALLBACK overlay is retired on a binding change
@@ -3306,7 +3366,8 @@ export function Chat({
           && (latestRecent?.provider !== channel.provider || latestRecent?.id !== channel.model)) {
           setModelRecents(recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend))
         }
-        modelPicker.reset()
+        modelPicker.reset(modelPickerOpenProvider.current)
+        modelPickerOpenProvider.current = undefined
         dispatchOverlay({ type: 'open', overlay: { kind: 'model' } })
         setModelsLoading(true)
         const generation = ++modelCatalogGeneration.current
@@ -3646,6 +3707,13 @@ export function Chat({
         // interactive BalanceReportRow (hover for details, click to refresh).
         setHelpOpen(false)
         runBalance()
+        return true
+      }
+      case 'quota': {
+        // Ollama Cloud / OpenCode Go / Command Code subscription quotas:
+        // whatever each account reports becomes a local-output report.
+        setHelpOpen(false)
+        runQuota()
         return true
       }
       case 'settings': {
@@ -5940,10 +6008,9 @@ export function Chat({
    */
   const backendModeStatus = modeStatus(channel.backendModes?.()?.snapshot(), () => { void runCommand('permission', '') })
   /**
-   * 底栏模型段/思考档位段的点击（与模式段同一契约）：后端声明了模型目录或
-   * effort 能力（backendCapabilities 位）才挂，点击 = 既有 /model · /effort
-   * 命令（同一批选择器）；无能力不挂点击，hover 也不承诺（StatusLine 的
-   * effort hover id 与点击同乘，model hover 只是不追加操作行）。
+   * 输入框上边框左端的路线读数（`╭─[provider · model / effort]────`）的点击：
+   * 后端声明了模型目录或 effort 能力（backendCapabilities 位）才挂，点击 =
+   * 既有 /model · /effort 命令（同一批选择器）；无能力不挂点击。
    */
   const backendCaps = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
   const modelPickerStatus = backendCaps?.models === false
@@ -5952,6 +6019,59 @@ export function Chat({
   const effortPickerStatus = backendCaps?.effort === false
     ? undefined
     : { onOpen: () => { void runCommand('effort', '') } }
+
+  // 底栏原先的 model / effort 段已移到输入框上边框左端：显示开关仍读
+  // `statusBar.model` / `statusBar.thinking`。极简界面不再有底栏模型段，
+  // 所以固定保留模型部分（effort 仍随开关）。
+  const composerStatusBar = normalizeStatusBar(channel.statusBar)
+  // 输入框上边框右端的 cwd 铭牌：与状态行同一条展示口径（家目录折成 `~`，
+  // 远端工作区用 displayCwd 原样）；`statusBar.cwd` 关掉时一并隐藏。
+  const composerCwdLabel = composerStatusBar.cwd && channel.displayCwd !== ''
+    ? (channel.displayCwd === channel.cwd
+        ? formatProject(channel.displayCwd, homeDir())
+        : channel.displayCwd)
+    : undefined
+  /** 同一个读数再点一次 = 关掉它打开的选择器（与 Esc 同位）：打开只需要
+   *  一次点击，关闭不该强制用户回到键盘。能力位缺席时保持不可点。 */
+  const togglePicker = (kind: 'model' | 'effort', open: (() => void) | undefined): (() => void) | undefined =>
+    open === undefined
+      ? undefined
+      : () => {
+          if (overlay.kind === kind) {
+            dispatchOverlay({ type: 'close-if', kind })
+            return
+          }
+          // 另一个选择器开着时先收起：/effort 的打开是 open-if(none)，
+          // 不先关掉就会被模型选择器挡住。
+          if (overlay.kind === 'model' || overlay.kind === 'effort') {
+            dispatchOverlay({ type: 'close-if', kind: overlay.kind })
+          }
+          open()
+        }
+  /** Provider part of the border readout: open the /model picker on THIS
+   *  provider's list. While the picker is already up, switch its tab instead
+   *  of closing it (the model part keeps the click-to-close toggle). */
+  const openModelOnProvider = (provider: string): void => {
+    if (provider === '') return
+    if (overlay.kind === 'model') {
+      modelPicker.focusProvider(provider)
+      return
+    }
+    modelPickerOpenProvider.current = provider
+    void runCommand('model', '')
+  }
+  const composerModelLabel = {
+    // Catalog display name when loaded; the route key is the documented
+    // fallback while the catalog is still in flight (or absent).
+    provider: providerInfos.find(info => info.id === channel.provider)?.name ?? channel.provider,
+    model: channel.modelDisplay ?? channel.model,
+    effort: channel.reasoningEffort,
+    showModel: channel.minimalUi ? true : composerStatusBar.model,
+    showEffort: composerStatusBar.thinking,
+    onOpenProvider: modelPickerStatus === undefined ? undefined : () => openModelOnProvider(channel.provider),
+    onOpenModel: togglePicker('model', modelPickerStatus?.onOpen),
+    onOpenEffort: togglePicker('effort', effortPickerStatus?.onOpen),
+  }
 
   const pickerPanels = (
     <>
@@ -7357,6 +7477,8 @@ export function Chat({
               : undefined
           }
           controllerRef={promptControllerRef}
+          modelLabel={composerModelLabel}
+          cwdLabel={composerCwdLabel}
           onCaretImage={handleCaretImage}
           caretPreviewOpen={peekPreview !== null}
           onDismissCaretPreview={dismissPeek}
@@ -7367,16 +7489,13 @@ export function Chat({
           selectionActive={selectionActive}
           helpOpen={helpOpen}
           pluginFields={statusFields}
+          quota={quotaFooter}
           // Backend-native permission modes: the footer mode segment always
           // shows (the base mode included) and clicks into the same
           // /permission picker the command opens (the launchpad param row's
           // route). DSH answers an empty list here — no prop, byte-identical
           // rendering.
           backendMode={backendModeStatus}
-          // 模型段/思考档位段：能力位在才可点，点击走既有 /model · /effort
-          // 命令（与模式段打开 /permission 完全同构）。
-          modelPicker={modelPickerStatus}
-          effortPicker={effortPickerStatus}
           wake={
             wakeBand === undefined
               ? undefined

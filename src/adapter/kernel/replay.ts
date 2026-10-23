@@ -106,6 +106,7 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   listFiles: 'files',
   listSubagents: 'subagents',
   balanceInfo: 'credentials',
+  quotaInfo: 'credentials',
 })
 
 /**

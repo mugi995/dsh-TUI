@@ -6,10 +6,8 @@
  *     弹出完整路径 + 类型；完整可见的短路径行不弹。
  *  G. 会话列表行：标题截断时悬停弹【完整标题 + 绝对时间 + cwd】；标题
  *     未截断时浮层不重复标题（只带时间 + cwd）。
- *  H. 状态栏 model/git 字段：悬停 model 弹 provider + ctx 窗口明细；
- *     悬停 git 弹完整分支名（原地明细行契约，与 tps/cost 同款）。
- *  H2. 状态栏 cache 字段：明细只列非零的缓存分项——DeepSeek 路由从不上报
- *     缓存写入（write 恒 0 或整键缺席），旧代码把它写成「write 0」。
+ *  H. 状态栏 git 字段：悬停 git 弹完整分支名（原地明细行契约，与
+ *     tps/cost 同款）。model/effort 已移到输入框上边框（无 hover 明细）。
  *  I. 上下文进度条：条上不再有任何文字（内容类型只由颜色表达，唯一的
  *     文本是最右占比）；整条一个悬停目标，悬停任意位置弹【全部内容类型
  *     + free】的色块+数字明细——条没有标签，这行就是它的 legend。
@@ -173,11 +171,10 @@ try {
   }
   hover(stdin, 1, 1)
 
-  // --- H. 状态栏字段：model/git 悬停明细 ---------------------------------
+  // --- H. 状态栏字段：git 悬停明细 ---------------------------------------
   const channelStub = {
     minimalUi: false,
     statusBar: { gitBranch: true },
-    model: 'TM',
     provider: 'test-provider',
     contextWindow: 64_000,
     gitBranch: 'test-branch-long',
@@ -208,65 +205,12 @@ try {
       </Box>
     </AlternateScreen>,
   )
-  check('场景 H 就绪：状态栏 model/git 字段在屏',
-    await settled(() => screenHas(term, 'TM') && screenHas(term, 'test-branch-long')))
-  check('H 未悬停时无明细行', !screenHas(term, 'provider test-provider'))
-  hoverText(stdin, term, 'TM')
-  check('H 悬停 model 字段弹 provider/ctx 明细',
-    await settled(() => screenHas(term, 'provider test-provider') && screenHas(term, 'ctx 64k')))
+  check('场景 H 就绪：状态栏 git 字段在屏',
+    await settled(() => screenHas(term, 'test-branch-long')))
+  check('H 未悬停时无明细行', !screenHas(term, 'git test-branch-long'))
   hoverText(stdin, term, 'test-branch-long')
   check('H 悬停 git 字段弹完整分支明细',
     await settled(() => screenHas(term, 'git test-branch-long')))
-  check('H 明细随悬停目标切换（model 明细已离开）',
-    await settled(() => !screenHas(term, 'provider test-provider')))
-  hover(stdin, 1, 1)
-
-  // --- H2. cache 字段悬停：为零/缺席的缓存分项不进明细 --------------------
-  // 实证（本机 500 个会话日志、133 个 provider 会话）：官方 deepseek-official
-  // 与第三方 commandcode 两条 DeepSeek 路由的 cacheWriteTokens 恒为 0 或整键
-  // 缺席（官方 4368 条记录里 0 条为正），旧代码把两者都渲染成「write 0」——
-  // 等于宣称一个 provider 从未给过的数字。现在 read/write 只在 > 0 时出现，
-  // 命中率与 input 始终在（footer 字段本身不变）。
-  const CACHE_USAGE = { input: 2_217, output: 325, cacheRead: 18_432, cacheWrite: 0 }
-  const cacheTree = (lastUsage: typeof CACHE_USAGE) => (
-    <AlternateScreen>
-      <Box flexDirection="column">
-        <KeySink />
-        <StatusLine
-          channel={{ ...channelStub, statusBar: { cache: true }, lastUsage } as never}
-        />
-        <tooltip.TooltipLayer />
-      </Box>
-    </AlternateScreen>
-  )
-  instance.rerender(cacheTree(CACHE_USAGE))
-  check('场景 H2 就绪：cache 字段（命中率）在屏', await settled(() => screenHas(term, '缓存')))
-  hoverText(stdin, term, '缓存')
-  {
-    const read = `read ${formatTokens(CACHE_USAGE.cacheRead)}`
-    const input = `input ${formatTokens(CACHE_USAGE.input)}`
-    check('H2 cacheWrite=0 时明细不给 write，read/input 仍在',
-      await settled(() => screenHas(term, read) && screenHas(term, input) && !screenHas(term, 'write')),
-      `${read} / ${input}`)
-  }
-  {
-    const WRITE_USAGE = { ...CACHE_USAGE, cacheWrite: 6_000 }
-    instance.rerender(cacheTree(WRITE_USAGE))
-    check('场景 H2b 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
-    hoverText(stdin, term, '缓存')
-    const write = `write ${formatTokens(WRITE_USAGE.cacheWrite)}`
-    check('H2 cacheWrite>0 时明细给出 write', await settled(() => screenHas(term, write)), write)
-  }
-  {
-    const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
-    instance.rerender(cacheTree(COLD_USAGE))
-    check('场景 H2c 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
-    hoverText(stdin, term, '缓存')
-    const input = `input ${formatTokens(COLD_USAGE.input)}`
-    check('H2 冷启动（read/write 皆 0）明细只给 input',
-      await settled(() => screenHas(term, input) && !screenHas(term, 'read') && !screenHas(term, 'write')),
-      input)
-  }
   hover(stdin, 1, 1)
 
   // --- I. 上下文进度条：无标签 + 整条悬停给全量明细 ----------------------
@@ -277,8 +221,8 @@ try {
   const USED = 12_500 // input 12000 + cacheRead 500
   {
     const plain = metrics.renderContextBar(SEGMENTS, USED, 64_000, 60).replace(/\x1b\[[0-9;]*m/g, '')
-    check('I0 条上无类型名：去 ANSI 只剩空格与最右读数',
-      /^\s*13k\/64k 19\.5%$/.test(plain), `plain=${JSON.stringify(plain)}`)
+    check('I0 条上无任何文字：去 ANSI 只剩空格',
+      plain.trim() === '', `plain=${JSON.stringify(plain)}`)
     const ansi = metrics.renderContextBar(SEGMENTS, USED, 64_000, 60)
     check('I0 条仍按内容类型着色', ansi.includes('48;2;34;48;95m') && ansi.includes('48;2;90;124;255m'),
       'system/tools fills present')
@@ -292,11 +236,6 @@ try {
       && metrics.contextPressureStep(94.9) === 'warning'
       && metrics.contextPressureStep(95) === 'error',
       [79.9, 80, 94.9, 95].map(p => `${p}:${metrics.contextPressureStep(p) ?? 'none'}`).join(' '))
-    const warm = metrics.renderContextBar(SEGMENTS, 53_760, 64_000, 60) // 84.0%
-    const hot = metrics.renderContextBar(SEGMENTS, 61_440, 64_000, 60) // 96.0%
-    check('I0 压力染色：84% 琥珀 / 96% 红（ANSI 路径）',
-      warm.includes('38;2;202;138;4') && hot.includes('38;2;255;107;128'),
-      `warm=${warm.includes('38;2;202;138;4')} hot=${hot.includes('38;2;255;107;128')}`)
     const wide = metrics.contextBarBreakdown(SEGMENTS, USED, 64_000, 120)
     check('I0 宽终端明细用可读名 + 圆点分隔',
       wide.entries.map(e => e.label).join(wide.separator)
@@ -344,13 +283,15 @@ try {
   )
   const barTerm = barRig.term
   const barStdin = barRig.stdin
-  check('场景 I 就绪：进度条读数在屏', await settled(() => screenHas(barTerm, '19.5%')))
+  check('场景 I 就绪：ctx 读数在屏', await settled(() => screenHas(barTerm, '19.5%')))
   {
-    // 条自身那一行：最右读数（总数 + 占比）是全部文字，没有任何类型名。
-    const barRow = findText(barTerm, '19.5%')?.row ?? -1
+    // The ctx readout moved to its own row under the bar; the bar row itself
+    // carries no text at all now.
+    const ctxRow = findText(barTerm, '19.5%')?.row ?? -1
+    const barRow = ctxRow - 1
     const line = (barRow < 0 ? '' : barTerm.buffer.active.getLine(barRow)?.translateToString(true) ?? '')
-    check('I 条行只有最右读数、无任何类型名',
-      /^\s*13k\/64k 19\.5%$/.test(line), `line=${JSON.stringify(line)}`)
+    check('I 条行没有任何文字（读数在下一行）',
+      line.trim() === '', `line=${JSON.stringify(line)}`)
     // 各段仍是纯色填充：无子节点的 Box 只靠自己的底色铺满（去掉标签后唯一
     // 的表达方式），底色不画就等于整条消失。
     const bgAt = (x: number): number =>
@@ -360,8 +301,9 @@ try {
     check('I free 段铺到条尾', [0x2e3440, 0xe8e8e8].includes(bgAt(116)),
       `free bg=${bgAt(116).toString(16)}`)
   }
-  // 悬停条最右（free 区）：明细是「全部内容类型」，不只是 free。
-  hoverText(barStdin, barTerm, '19.5%')
+  // 悬停条本身（整条一个目标；条上不再有可命中的文字，用坐标）。
+  const barY = (findText(barTerm, '19.5%')?.row ?? 1) - 1
+  hover(barStdin, 2, barY + 1)
   check('I 悬停条尾弹全量明细（含 system 与 thinking）',
     await settled(() => screenHas(barTerm, 'system 1.2k') && screenHas(barTerm, 'thinking 5.0k')))
   check('I 明细同一行带 free 项', screenHas(barTerm, 'free 52k'))
@@ -382,8 +324,7 @@ try {
   // 悬停条首（system 段）：仍是同一条全量明细 —— 整条一个悬停目标，明细
   // 不随段落切换而变化（逐段明细是这次去掉的旧行为）。
   {
-    const barRow = findText(barTerm, '19.5%')?.row ?? 0
-    hover(barStdin, 2, barRow + 1)
+    hover(barStdin, 2, barY + 1)
     check('I 悬停条首同样是全量明细（整条一个目标）',
       await settled(() => screenHas(barTerm, 'tools 2.0k') && screenHas(barTerm, 'free 52k')))
   }
@@ -393,8 +334,8 @@ try {
   // I2：只知占用、不知构成时，两处悬停都报实测已用量，不列五个 0。
   // 分别覆盖 meter 构成全零，以及旧 meter 缺席且本地估算为空。
   for (const sample of [
-    { model: 'ZERO-METER', contextSegments: SEGMENTS, contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 } },
-    { model: 'NO-METER', contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, contextBreakdown: undefined },
+    { name: 'ZERO-METER', contextSegments: SEGMENTS, contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 } },
+    { name: 'NO-METER', contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, contextBreakdown: undefined },
   ]) {
     barInstance.rerender(
       <AlternateScreen>
@@ -411,38 +352,61 @@ try {
         </Box>
       </AlternateScreen>,
     )
-    check(`I2 ${sample.model} 已上屏`, await settled(() => screenHas(barTerm, sample.model)))
-    hoverText(barStdin, barTerm, '19.5%')
-    check(`I2 ${sample.model} 条悬停沿用已用量兜底`, await settled(() => screenHas(barTerm, '已用 13k')))
-    hoverText(barStdin, barTerm, 'ctx')
-    check(`I2 ${sample.model} ctx 悬停沿用已用量兜底`,
-      await settled(() => screenHas(barTerm, '已用 12.5k') && !screenHas(barTerm, 'sys 0')),
-      JSON.stringify(viewportLines(barTerm).filter(line => line !== '')))
+    check(`I2 ${sample.name} 已上屏`, await settled(() => screenHas(barTerm, '19.5%')))
+    const i2BarY = (findText(barTerm, '19.5%')?.row ?? 1) - 1
+    hover(barStdin, 2, i2BarY + 1)
+    check(`I2 ${sample.name} 条悬停沿用已用量兜底`, await settled(() => screenHas(barTerm, '已用 13k')))
     hover(barStdin, 1, 1)
   }
 
-  // 压力染色上屏：同一实例改用 84% 占用重渲染，读数文字应转成主题 warning。
   const { ThemeProvider } = ui
+  // I3. statusBar.contextBarStyle='blocks'：单色 █/░ 字符计量条（原始 TUI
+  // 外观）。条上没有任何背景填充；悬停图例保留名称+数字但去掉色块（单色条
+  // 上没有颜色可供色块对应）。
   barInstance.rerender(
     <AlternateScreen>
       <Box flexDirection="column">
         <KeySink />
         <ThemeProvider theme="dark">
           <StatusLine
-            channel={{ ...barStub, lastUsage: { input: 54_000, output: 0, cacheRead: 0, cacheWrite: 0 } } as never}
+            channel={{
+              ...barStub,
+              lastUsage: { input: 16_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+              statusBar: { contextBar: true, contextBarStyle: 'blocks' },
+            } as never}
           />
         </ThemeProvider>
+        <tooltip.TooltipLayer />
       </Box>
     </AlternateScreen>,
   )
-  check('I 高压占用读数在屏（84.4%）', await settled(() => screenHas(barTerm, '84.4%')))
+  check('I3 blocks 模式就绪', await settled(() => screenHas(barTerm, '25.0%')))
   {
-    const at = findText(barTerm, '84.4%')
-    const fg = at === null
-      ? 0
-      : (barTerm.buffer.active.getLine(at.row)?.getCell(at.col)?.getFgColor() ?? 0) & 0xffffff
-    check('I 读数转琥珀（主题 warning #D8B270）', fg === 0xd8b270, `fg=${fg.toString(16)}`)
+    const ctxY = findText(barTerm, '25.0%')?.row ?? -1
+    const y = ctxY - 1
+    const line = y < 0 ? '' : barTerm.buffer.active.getLine(y)?.translateToString(true) ?? ''
+    check('I3 条是纯 █/░ 字符计量条（无读数文字）',
+      /^█+░+$/.test(line.slice(1)), JSON.stringify(line))
+    let background = false
+    for (let x = 0; x < barTerm.cols; x++) {
+      const cell = barTerm.buffer.active.getLine(y)?.getCell(x)
+      if (cell !== undefined && !cell.isBgDefault()) background = true
+    }
+    check('I3 条行没有背景色块', !background)
+    const fg = ((barTerm.buffer.active.getLine(y)?.getCell(1)?.getFgColor() ?? 0) & 0xffffff)
+    check('I3 单色：█ 用 inactiveShimmer', fg === 0xaab2c2, `fg=${fg.toString(16)}`)
   }
+  const bar25Row = (findText(barTerm, '25.0%')?.row ?? 1) - 1
+  hover(barStdin, 2, bar25Row + 1)
+  check('I3 悬停仍给全量明细',
+    await settled(() => screenHas(barTerm, 'system 1.5k') && screenHas(barTerm, 'free 48k')),
+    JSON.stringify(viewportLines(barTerm).filter(line => line !== '')))
+  {
+    const at = findText(barTerm, 'system 1.5k')
+    const before = at === null ? undefined : barTerm.buffer.active.getLine(at.row)?.getCell(at.col - 1)
+    check('I3 单色条图例不带色块', before?.isBgDefault() === true)
+  }
+  hover(barStdin, 1, 1)
   barInstance.unmount()
   await sleep(100) // 固定窗:pacing unmount 收尾输出 flush，无可观测完成条件
 
@@ -462,7 +426,6 @@ try {
   const K_STUB = {
     minimalUi: false,
     statusBar: { mode: true },
-    model: 'TM',
     provider: 'test-provider',
     contextWindow: 64_000,
     gitBranch: 'main',
@@ -581,37 +544,40 @@ try {
     await sleep(150) // 固定窗:pacing 换实例前等上一个卸载收尾
   }
 
-  // K2. 缺席（DSH 会话）：渲染逐字节等于改动前的输出。
+  // K2. 缺席（DSH 会话）：底栏逐字节等于当前契约。model/effort/cwd 已移到
+  // 输入框上边框；底栏第一行是 ctx/cache 读数，模式段在第二行（标记时）。
+  const K_CTX_LINE = ' ctx --/-- 0% cache 0%'
+  const K_CTX_SIG = '1@ffffff/ffffff 4@8d95a6/ffffff 9@aab2c2/ffffff 6@8d95a6/ffffff 2@aab2c2/ffffff 38@ffffff/ffffff'
   const DSH_GOLDEN = [
     {
       key: '基础模式（不显示 mode 段）',
       channel: { ...K_STUB, modeIndex: 0 },
-      line: ' TM · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 47@ffffff/ffffff',
+      line: K_CTX_LINE,
+      sig: K_CTX_SIG,
     },
     {
       key: '标记模式（Shift+Tab 到第 2 档）',
       channel: { ...K_STUB, modeIndex: 1 },
-      line: ' TM · 默认 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 4@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 40@ffffff/ffffff',
+      line: K_CTX_LINE + '\n 默认',
+      sig: K_CTX_SIG,
     },
     {
       key: '计划模式',
       channel: { ...K_STUB, mode: { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' } },
-      line: ' TM · 计划模式 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@7fae99/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 36@ffffff/ffffff',
+      line: K_CTX_LINE + '\n 计划模式',
+      sig: K_CTX_SIG,
     },
     {
       key: '完全访问（danger-full-access + approval never）',
       channel: { ...K_STUB, mode: { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' } },
-      line: ' TM · 完全访问 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 36@ffffff/ffffff',
+      line: K_CTX_LINE + '\n 完全访问',
+      sig: K_CTX_SIG,
     },
   ]
   for (const golden of DSH_GOLDEN) {
     const { rig, instance } = await openModeRig(golden.channel)
     const { term } = rig
-    check('K2 就绪：' + golden.key, await settled(() => screenHas(term, 'dsh-tui')))
+    check('K2 就绪：' + golden.key, await settled(() => screenHas(term, 'cache 0%')))
     await sleep(250) // 固定窗:探针 末帧落定：金标准比对的是「整行字节」，不能比对半帧
     const dump = dumpMode(term)
     check('K2 ' + golden.key + ' 字符行逐字节不变',
@@ -619,7 +585,7 @@ try {
     check('K2 ' + golden.key + ' 状态行配色逐格不变',
       dump.sigs[0] === golden.sig, 'got=' + JSON.stringify(dump.sigs[0]))
     check('K2 ' + golden.key + ' 其余行仍是空屏',
-      dump.sigs.slice(1).every(s => s === K_BLANK_SIG))
+      dump.sigs.slice(golden.line.split('\n').length).every(s => s === K_BLANK_SIG))
     instance.unmount()
     await sleep(120) // 固定窗:pacing 换实例前等上一个卸载收尾
   }
@@ -638,14 +604,15 @@ try {
       await sleep(120) // 固定窗:pacing 换实例前等上一个卸载收尾
     }
     // (b) minimalUi=true + backendMode → 段不显示：极简界面是用户显式选的
-    // 「只要模型 + 目录」，不能被安全读数顶掉。
+    // 「只要目录」，不能被安全读数顶掉；模型读数改由输入框上边框承载（不在
+    // 本脚本挂载的 StatusLine 里）。
     {
       const { rig, instance } = await openModeRig({ ...K_STUB, minimalUi: true }, seg)
-      check('K3b minimalUi 就绪', await settled(() => screenHas(rig.term, 'dsh-tui')))
+      check('K3b minimalUi 就绪', await settled(() => screenHas(rig.term, 'cache 0%')))
       await sleep(250) // 固定窗:探针 末帧落定：金标准比对的是「整行字节」，不能比对半帧
       const dump = dumpMode(rig.term)
-      check('K3b minimalUi：底栏只剩模型+目录（模式段不显示）',
-        dump.lines.join('\n') === ' TM · dsh-tui', 'got=' + JSON.stringify(dump.lines))
+      check('K3b minimalUi：底栏只剩 ctx/cache 行（模式段不显示）',
+        dump.lines.join('\n') === K_CTX_LINE, 'got=' + JSON.stringify(dump.lines))
       check('K3b minimalUi：屏上无后端模式名', !dump.lines.join('\n').includes('自动接受编辑'))
       instance.unmount()
       await sleep(120) // 固定窗:pacing 换实例前等上一个卸载收尾
@@ -654,11 +621,11 @@ try {
     // 一致：标记模式照样藏起，行内容等于基础模式金标准。
     {
       const { rig, instance } = await openModeRig({ ...K_STUB, statusBar: { mode: false }, modeIndex: 1 })
-      check('K3c DSH mode:false 就绪', await settled(() => screenHas(rig.term, 'dsh-tui')))
+      check('K3c DSH mode:false 就绪', await settled(() => screenHas(rig.term, 'cache 0%')))
       await sleep(250) // 固定窗:探针 末帧落定：金标准比对的是「整行字节」，不能比对半帧
       const dump = dumpMode(rig.term)
       check('K3c DSH 关掉字段开关时标记模式不显示（逐字节同基础模式）',
-        dump.lines.join('\n') === ' TM · dsh-tui', 'got=' + JSON.stringify(dump.lines))
+        dump.lines.join('\n') === K_CTX_LINE, 'got=' + JSON.stringify(dump.lines))
       check('K3c 状态行配色逐格不变',
         dump.sigs[0] === DSH_GOLDEN[0].sig, 'got=' + JSON.stringify(dump.sigs[0]))
       check('K3c 其余行仍是空屏', dump.sigs.slice(1).every(s => s === K_BLANK_SIG))

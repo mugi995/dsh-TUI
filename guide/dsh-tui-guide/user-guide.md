@@ -328,6 +328,7 @@ dsh-tui
 | `/status` | 无 | 模型+effort、工作/空闲、会话 id、目录+git 分支、token、缓存命中率、上下文百分比、会话标题 |
 | `/cost` | 无 | token 用量 + 缓存命中率 + 本会话估算（并入子代理）与「主会话/子代理」拆解；非官方/未收录模型只显示 token 并标注未计价（**估算是参考，以平台账单为准**） |
 | `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（同款本会话估算拆解：主会话/子代理/未计价），点击刷新、`×` 关闭 |
+| `/quota` | 无（需 `OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`、`COMMANDCODE_API_KEY`、`OPENROUTER_API_KEY`） | 订阅额度明细：Ollama Cloud（套餐剩余/额度、购买余额）、OpenCode Go（5 小时/周/月百分比）、Command Code（credits + 5 小时/周/月窗口）、OpenRouter（账户 credits / key 限额 / 预算窗口），并立即刷新 ctx/cache 行右侧的常驻额度；只显示各接口实际返回的字段，失败的服务标出原因 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
 | `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
@@ -512,6 +513,13 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 像素鲸鱼原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者
   [@lhh010](https://github.com/lhh010)），特此致谢。
 
+**应答结束 — 模型 / 耗时 / decode tok/s**（常时）
+
+- 每个应答（回合）末尾左对齐显示 `模型 / effort · 12.4s · 42 tok/s`，与正文隔一行空行（未记录 effort 的回合省略 `/ effort`）。
+- decode tok/s 按流式解码区间统计；无法测量的回合显示 `— tok/s`。
+- `/settings → Turn usage row`（`turnUsageRow`，默认关闭）打开后改为完整账本
+  （输入/输出、缓存、重试），并在末尾附上 decode tok/s。
+
 **超长单行折叠**（默认开）
 
 - **单行超过 1000 字符**的文本折叠为 `… 已折叠 N 字符（点击或 ctrl+o 展开）` 标记。
@@ -520,7 +528,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 ### 5.2 底部状态栏（输入框下方三行）
 
-**Row 1 — 上下文分段进度条**（`/settings → statusBar.contextBar`，默认开）
+**Row 1 — 上下文进度条**（`/settings → statusBar.contextBar`，默认开）
 
 - 按内容类型分段着色（system / prompt / assistant / thinking / tools）。
 - 分段着色按内容类型（system / prompt / assistant / thinking / tools）。**已用段的长短严格等于读数**
@@ -531,27 +539,54 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
   只用本地估算。
 - 悬停图例报的就是条上那批份额（按占用归因），**五段 + free 合起来正好是窗口**（`1.2k` 这类缩写
   每项最多差半个单位），不再出现「五段加起来只有读数一半」。估算本身**不参与占用总量**——占用以
-  ctx 字段/读数为准（见下）。
-- 构成无法归因到任何类别时，条保持单块已用区域；条和 ctx 字段的悬停明细都报实测 `used`，不列五个零分类。
-- 条上唯一文字是最右缘读数 `13k/64k 19.5%`（窄屏只显示 `19.5%`）。
-- 读数按占用率变色：<80% 灰蓝，**≥80% 琥珀、≥95% 红**。
+  Row 1b 的读数为准。
+- 构成无法归因到任何类别时，条保持单块已用区域；条的悬停明细报实测 `used`，不列五个零分类。
+- 条上不再有任何文字（数字在正下方的 Row 1b）；已用段仍按内容类型着色。
 - 悬停整条弹出图例：色块 + 名称 + token 数（窄屏自动改用短名）。
+- 画法可切换：`/settings → Context bar style`（`statusBar.contextBarStyle`）选 `blocks` 时改为单色
+  `█`（已用）/ `░`（空余）字符计量条；悬停图例只留名称与 token 数（没有色块可对应）。
+  `segments`（默认）保持上面描述的分段外观。
+
+**Row 1b — ctx / cache 读数**（`statusBar.contextUsage` / `statusBar.cache`，默认开）
+
+- 进度条正下方一行：`ctx 13k/64k 19.5% cache 2.4%`；占用未取得时 `ctx --/-- 0% cache 0%`。
+- 占用与进度条、工作线压力前缀、`/tokens`、`/status` 和上下文告警**同读一个值**：harness 的
+  `contextPressure` 投影优先（`projectedTokens ?? pressureTokens`），投影缺席的裸 `cordis.yml`
+  组合回退到上次请求的计费用量；压缩或被拒请求会立刻反映。
+- 两个开关分别控制 ctx 与 cache 段；都关掉时整行消失。旧底栏的 ctx / cache 字段已撤除。
+
+**Row 1c — 订阅额度（常驻，ctx/cache 行右侧）**
+- ctx/cache 行右侧常驻 Ollama Cloud / OpenCode Go / Command Code / OpenRouter 的额度行（`statusBar.quota` 默认开；有数据才显示，极简界面隐藏）。
+- 金额按数值显示（如 `$72.50/$100`）；每个窗口的使用率显示为 `[##########]0%`（10 格、整百分比）。
+- 只显示接口实际返回的字段；某个服务未配置或失败时不占行，详情用 `/quota` 查看。
+- 密钥来自 DSH credentials 或环境变量（`OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY`、`COMMANDCODE_API_KEY`、`OPENROUTER_API_KEY`；OpenRouter 账户余额另需可选的 `OPENROUTER_MANAGEMENT_KEY`，普通 key 只显示 key 限额/预算）；
+  每 5 分钟刷新，`/quota` 会立即刷新并打印明细。
+
+**输入框上边框 — 左：提供方 / 模型 / 思考档、右：cwd**
+
+- `/settings → statusBar.model`（默认开）在输入框上边框左端显示
+  `╭─[提供方 · 模型 / 思考档]────`；`statusBar.thinking`（默认开）控制后半段。
+- 点击**提供方**部分打开 `/model` 里该提供方的模型列表；点击**模型**部分打开最近使用（recently used）列表；
+  点击思考档部分打开 `/effort` 选择器。选择器打开后再点模型/思考档读数即可关闭，不必按 Esc。
+- 终端变窄时依次省略提供方、思考档，再截短模型名；会话名标签开启时排在它左侧。
+- 右端以方括号显示当前工作目录（`[~/project]`，家目录折成 `~`；窄屏保留路径末尾）。
+  `statusBar.cwd` 关闭时隐藏。
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
-- 左组：模型 → TPS → thinking → mode → ctx（**上下文占用** `19.5% (13k/64k)`：与分段条、工作线压力前缀、`/tokens`、`/status` 和上下文告警**同读一个值**，来源是 harness 自带的 `contextPressure` 投影——`projectedTokens ?? pressureTokens`，即「下一次请求」的占用，压缩与被拒请求都会立刻反映，不再等一次成功请求；投影缺席的裸 `cordis.yml` 组合回退到上次请求的计费用量）→ cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
+- 左组：TPS → mode → tokens（`1.2k→340` 输入→输出）→
   cost（`≈¥0.05 谷`，**本会话估算**：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；
   hover 拆「主会话 ¥ / 子代理 ¥ / 未计价 N tok」；非官方/未收录模型只显示 token 并标注未计价；
   **估算是参考，以平台账单为准**）
-- 右组：git 分支（**跟随工作树 HEAD**——别处切分支约 1 秒内反映到界面，detached HEAD 时清空）→ 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
+- 右组：git 分支（**跟随工作树 HEAD**——别处切分支约 1 秒内反映到界面，detached HEAD 时清空）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）；工作目录只显示在输入框右上角
 - `statusBar.compact` 时左右合并为单行。
 - **插件底栏字段**：插件可通过 `ctx.tuiStatus.setField` 贡献字段（三槽：左组末尾 / 右组开头 / 右组末尾，可选 hover 详情与全屏点击）；`statusBar.pluginFields`（默认开）可一次关掉全部插件字段，关闭不会卸载插件。
 - **逐字段启停与排序**：`/settings → Status bar → 插件底栏字段名单`（`statusBar.pluginFieldsOrder`）把字段按三槽分组列出，逐条勾选，并用底部「高级」行调整顺序。值形如 `build,ci;git;pet`——恰好三组（`;` 分隔），组序号即槽位、组内顺序即显示顺序；列进名单的字段跟随所在组（覆盖插件声明的槽）。留空 = 一个都不显示；`*`（默认）= 全部（含以后注册的字段，按声明槽与注册序）。从 `*` 进入高级行编辑会预填三组骨架，原样保存不改变模式；名单固定后新注册的字段默认不出现，需要勾选。
-- 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、contextBar、pluginFields。
+- 默认开：compact、model、thinking、cwd、contextUsage、cache、quota、cost、goal、contextBar、pluginFields。
 - 默认关：tokens、tps、gitBranch、sessionTitle、sessionId、mode、activity、trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`、运行中 `esc to interrupt`、选择中 `esc to return to input`。
-- 空闲还显示 working-activity 动画帧（`statusBar.activity` 开），上下文 ≥80% 琥珀、≥95% 红（与 ctx 字段同一占用读数）。
+- 空闲还显示 working-activity 动画帧（`statusBar.activity` 开），上下文 ≥80% 琥珀、≥95% 红（与 Row 1b 同一占用读数）。
 - 右侧**迷你轨迹条 MiniWake**（`statusBar.trajectory`，默认关）：会话投影为密度字形，颜色区分通道，失败列染红；
   窄屏降格/隐藏。
 
@@ -569,7 +604,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
 | fullscreen | 全屏模式（默认开）；保存后用 `/restart` 生效 |
 | launchpad | 启动页（落地页，默认开）：普通启动先落启动页输入第一句话；关闭后直接进入聊天页（带 `--resume` 等恢复目标的启动不受影响，仍直接进会话）。保存后用 `/restart` 生效 |
-| minimal | 极简界面 Minimal UI（默认关）：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留模型与目录；代码高亮与工具配色保留。**这是界面开关**，对模型能力没有任何影响——别和 `/preset` 的内核「极简模式」预设搞混 |
+| minimal | 极简界面 Minimal UI（默认关）：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留目录（模型读数移到输入框上边框左端）；代码高亮与工具配色保留。**这是界面开关**，对模型能力没有任何影响——别和 `/preset` 的内核「极简模式」预设搞混 |
 | terminalImages | 终端图片预览（默认开，需终端支持）；保存后用 `/restart` 生效。关闭后只显示文字信息并跳过预览解码，不影响向模型发送图片 |
 | imageBacking | 图片底色（默认 `transparent`，与上一条同在**图表与图片**主题下）：聊天照片/插图背后垫什么。透明：只画图片自己的像素，抗锯齿边缘和透明圆角透出终端底色或壁纸；终端底色：先合成到终端背景色，柔和边缘更平滑。立即生效 |
 | codeFrameStyle | 代码框样式（默认 `light`）：`light` 左侧开放栏杆；`full` 带连续右边框和底边的封闭边框。终端太窄时显示纯代码围栏。立即生效 |
@@ -585,7 +620,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（细节见下） |
 | smoothStreaming | 流式平滑输出（默认开）：回复/思考/工具卡正文按 ~30fps 匀速揭示；回放/历史完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
-| turnUsageRow | 回合用量行（默认关闭）：在每回合末显示 token、缓存、耗时与重试摘要；`/tokens`、`/status` 和底栏 token 悬停不受此开关影响 |
+| turnUsageRow | 回合用量行（默认关闭）：回复末尾默认显示 `模型 / effort · 耗时 · decode tok/s`；开启后换成完整账本（token、缓存、重试）并附 decode tok/s。`/tokens`、`/status` 和底栏 token 悬停不受此开关影响 |
 | mermaidDiagrams | Mermaid 图表（默认开）：回复中的 ```` ```mermaid ```` 代码块画成字符图，流式期间逐步成形；比终端宽或类型不支持的图保留源码并注明所需列数。立即生效 |
 | mathRendering | LaTeX 公式（默认 `auto`，在 `/settings` 的**公式设置**子页里）：回复中的 `$…$`、`\(…\)` 行内公式，`$$…$$`、`\[…\]` 与单独成行的 `\begin{align}` 等显示环境块级公式的显示方式。`auto` 用当前最好的渲染方式（目前是 Unicode 文本，块级公式里的分数与上下限竖排），`image` 在支持图形的终端里用 MathJax 把公式排版成图片——Kitty 图形协议（Kitty、Ghostty、WezTerm、iTerm2 等）或 Sixel（Windows Terminal 1.22+、xterm、foot、WezTerm）（颜色跟随主题文字色；块级公式最多 16 行，行内公式在能压成一行且不糊时也显示为一行高的图片；流式中的公式、暗色的思考区、不支持图形的终端、压成一行太小以及任何渲染失败都退回 Unicode），`unicode` 固定用 Unicode 文本，`source` 保留原始 TeX。不支持、仍在流式输出或比终端宽的公式保留源码（过宽的块级公式先退成单行）。价格（`$5`）、shell 变量（`$HOME`）与代码里的 `$` 不受影响。旧的 `latexMath: false` 仍等同 `source`。**点击公式图片**打开预览卡：按 2 倍单元格尺寸重排，可 100%–800% 缩放、拖拽平移，`Esc` 或点击卡片外关闭，标题即该公式的 TeX。Sixel 下公式**不带衬底**（只画笔画），终端底色或壁纸会透出来。标题立绘这类自带透明留白的插图同样不带衬底（`whaleGirl` 的真图就是这个行为）；照片、截图与卡片内的图像仍合成到底色上，因为 Sixel 表达不了软 alpha。立即生效 |
 | mathImageScale | 公式图片大小（默认 `auto`，与上一条同在**公式设置**子页）：配合 LaTeX 公式的「图片」使用——`auto` 与正文同尺寸，`large` / `xlarge` 把**块级**公式排得更大；终端图片是按设备像素 1:1 画的，所以"更大"就等于"每个笔画更多像素"，是唯一的清晰度杠杆。行内公式不受影响（只能占一行）。立即生效 |
@@ -593,7 +628,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/contextBarStyle/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；contextBarStyle 是进度条画法（`segments` 分段着色，默认；`blocks` 单色 `█`/`░` 字符条）；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
 
 **effortDefault**：模型没有该档时自动就近降级并弹提示；优先级 settings 用户层 > 上次 `/effort`
 （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。

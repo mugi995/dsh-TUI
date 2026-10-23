@@ -301,6 +301,12 @@ export const TIPS: readonly Tip[] = [
     en: '/balance shows your DeepSeek balance; click the row to refresh',
   },
   {
+    id: 'cmd-quota',
+    group: 'commands',
+    zh: '/quota 查看 Ollama Cloud / OpenCode Go / Command Code / OpenRouter 的订阅额度',
+    en: '/quota shows Ollama Cloud / OpenCode Go / Command Code / OpenRouter subscription quotas',
+  },
+  {
     id: 'cmd-context',
     group: 'commands',
     zh: '/context 查看已加载的上下文明细',

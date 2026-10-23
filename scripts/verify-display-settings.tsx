@@ -1,6 +1,7 @@
 /** Lightweight regression checks for display settings and their stable render output. */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
+import type { QuotaSnapshot } from '../src/quota/types.js'
 
 const [
   { strict: assert },
@@ -12,6 +13,7 @@ const [
   { AssistantToolUseMessage },
   { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
   { homeDir },
+  { formatProject },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -22,6 +24,7 @@ const [
   import('../src/components/messages/AssistantToolUseMessage.js'),
   import('../src/tuiDisplayPrefs.js'),
   import('../src/utils/paths.js'),
+  import('../src/sessions/format.js'),
 ])
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -123,7 +126,7 @@ const wake = {
 async function renderStatus(
   overrides: Record<string, unknown> = {},
   columns = 140,
-  options: { selectionActive?: boolean; helpOpen?: boolean } = {},
+  options: { selectionActive?: boolean; helpOpen?: boolean; quota?: QuotaSnapshot } = {},
 ): Promise<string> {
   const harness = makeHarness(columns)
   const channel = { ...baseChannel, ...overrides }
@@ -134,6 +137,7 @@ async function renderStatus(
         wake={wake as never}
         selectionActive={options.selectionActive}
         helpOpen={options.helpOpen}
+        quota={options.quota}
       />
     </ThemeProvider>,
     {
@@ -160,6 +164,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     cwd: true,
     contextUsage: true,
     cache: true,
+    quota: true,
     cost: true,
     tokens: false,
     tps: false,
@@ -169,6 +174,9 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     goal: true,
     mode: false,
     contextBar: true,
+    // The bar's look is a separate switch; the default keeps the five
+    // content-type segments, so existing users see no visual drift.
+    contextBarStyle: 'segments',
     activity: false,
     trajectory: false,
     shortcutHint: false,
@@ -214,53 +222,20 @@ check('formatCacheHitRate accepts usable snapshots and rejects invalid totals', 
 
 // StatusLine compact defaults.
 const compact = await renderStatus()
-check('compact StatusLine shows model, effort, cwd basename, context, and cache', () => {
-  for (const marker of ['display-model-probe', 'max', 'display-project', 'ctx 77% (206k/266k)', 'cache 2.4%']) {
+check('compact StatusLine shows the ctx/cache readout under the bar', () => {
+  // model / effort moved to the prompt border; cwd moved there too. The
+  // footer's remaining readout is the dedicated line under the gauge.
+  for (const marker of ['ctx 206k/266k 77.4%', 'cache 2.4%']) {
     assert.ok(compact.includes(marker), `missing ${JSON.stringify(marker)} in:\n${compact}`)
   }
+  assert.ok(!compact.includes('display-project'), `footer still shows the cwd:\n${compact}`)
 })
 
-const home = homeDir()
-const homeRoot = await renderStatus({ displayCwd: home, cwd: home })
-check('compact StatusLine collapses the home directory to a tilde', () => {
-  assert.ok(homeRoot.includes('~'), `missing home marker in:\n${homeRoot}`)
-  assert.ok(!homeRoot.includes(home), `raw home path leaked in:\n${homeRoot}`)
-})
-
-const homeRootWithSeparator = await renderStatus({ displayCwd: `${home}/`, cwd: `${home}/` })
-check('compact StatusLine collapses the home directory with a trailing separator', () => {
-  assert.ok(homeRootWithSeparator.includes('~'), `missing home marker in:\n${homeRootWithSeparator}`)
-  assert.ok(!homeRootWithSeparator.includes(home), `raw home path leaked in:\n${homeRootWithSeparator}`)
-})
-
-const homeChild = await renderStatus({
-  displayCwd: `${home}/dev/display-project`,
-  cwd: `${home}/dev/display-project`,
-  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
-})
-check('full StatusLine collapses paths below home', () => {
-  assert.ok(homeChild.includes('~/dev/display-project'), `missing collapsed home child in:\n${homeChild}`)
-  assert.ok(!homeChild.includes(home), `raw home path leaked in:\n${homeChild}`)
-})
-
-const external = await renderStatus({
-  displayCwd: '/opt/display-project',
-  cwd: '/opt/display-project',
-  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
-})
-check('full StatusLine keeps local paths outside home unchanged', () => {
-  assert.ok(external.includes('/opt/display-project'), `missing external cwd in:\n${external}`)
-  assert.ok(!external.includes('~/display-project'), `external cwd was collapsed:\n${external}`)
-})
-
-const providerDisplay = await renderStatus({
-  displayCwd: `${home}/remote-project`,
-  cwd: '/tmp/provider-alias',
-  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
-})
-check('full StatusLine preserves provider-owned display paths', () => {
-  assert.ok(providerDisplay.includes(`${home}/remote-project`), `missing provider cwd in:\n${providerDisplay}`)
-  assert.ok(!providerDisplay.includes('~/remote-project'), `provider cwd was collapsed:\n${providerDisplay}`)
+check('formatProject collapses home paths for the cwd label', () => {
+  const home = homeDir()
+  assert.equal(formatProject(home, home), '~')
+  assert.equal(formatProject(`${home}/dev/display-project`, home), '~/dev/display-project')
+  assert.equal(formatProject('/opt/display-project', home), '/opt/display-project')
 })
 
 check('compact StatusLine hides disabled optional fields', () => {
@@ -272,22 +247,82 @@ check('compact StatusLine hides disabled optional fields', () => {
 
 check('compact StatusLine shows the context bar by default', () => {
   // Defaults flipped on 2026-09-10: the bar renders without any /settings edit.
-  // The bar is fill-only (2026-09-10, community feedback on the s/p/t
-  // letters), so its row carries exactly one string: the right-aligned
-  // `counts percent` readout. Segment names live in the hover breakdown now
-  // (verify-hover-details group I).
-  const barRow = compact.split('\n')[0] ?? ''
-  assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
+  // The bar is fill-only and now carries NO text at all (the readout moved to
+  // the ctx/cache line directly under it), so the bar row is blank in the
+  // string rendering and the line below carries the numbers.
+  const [barRow = '', ctxRow = ''] = compact.split('\n')
+  assert.equal(barRow.trim(), '', `unexpected text on the bar row:\n${barRow}`)
+  assert.ok(ctxRow.includes('ctx 206k/266k 77.4% cache 2.4%'), `missing ctx/cache row:\n${ctxRow}`)
 })
 
 const minimalUi = await renderStatus({ minimalUi: true })
 check('minimal UI StatusLine stays free of the context bar', () => {
   // The minimal UI pins its decoration switches OFF instead of inheriting them:
   // the default flip above must not leak a bar row into the trimmed footer.
-  // Its ctx field spells the percentage '77%' (compact), so the bar's own
-  // one-decimal readout is the marker that must be absent.
-  assert.ok(!minimalUi.includes('77.4%'), `unexpected context-bar readout in:\n${minimalUi}`)
+  // The ctx line under the (absent) bar also spells 77.4%, so pin the BAR
+  // ROW shape rather than the string.
+  assert.ok(!minimalUi.split('\n').some(line => /^\s*206k\/266k 77\.4%$/.test(line)),
+    `unexpected context-bar row in:\n${minimalUi}`)
   assert.ok(!minimalUi.includes('system'), `unexpected context-bar segment in:\n${minimalUi}`)
+})
+
+const quota: QuotaSnapshot = {
+  fetchedAt: 0,
+  providers: [
+    {
+      id: 'ollama',
+      label: 'Ollama Cloud',
+      credits: { remaining: 72.5, limit: 100, currency: 'USD' },
+      windows: [{ id: 'included', usedPercent: 27.5 }],
+    },
+    {
+      id: 'opencode-go',
+      label: 'OpenCode Go',
+      windows: [
+        { id: 'five-hour', usedPercent: 40 },
+        { id: 'weekly', usedPercent: 78 },
+        { id: 'monthly', usedPercent: 82 },
+      ],
+    },
+    {
+      id: 'command-code',
+      label: 'Command Code',
+      plan: 'GOAT',
+      credits: { remaining: 73.03, currency: 'USD' },
+      windows: [
+        { id: 'five-hour', usedPercent: 12 },
+        { id: 'weekly', usedPercent: 11 },
+      ],
+    },
+    {
+      id: 'openrouter',
+      label: 'OpenRouter',
+      credits: { remaining: 87.5, limit: 100, currency: 'USD' },
+      windows: [{ id: 'budget-weekly', usedPercent: 80 }],
+    },
+  ],
+}
+const quotaStatus = await renderStatus({}, 140, { quota })
+check('subscription quota block sits to the right of the ctx/cache line', () => {
+  const lines = quotaStatus.split('\n')
+  const ctx = lines.findIndex(line => line.includes('ctx 206k/266k'))
+  assert.ok(ctx >= 0, `missing ctx line in:\n${quotaStatus}`)
+  const ctxLine = lines[ctx] ?? ''
+  // The first quota row shares the ctx/cache row; the remaining quota
+  // windows continue in the right-hand column below it.
+  assert.ok(ctxLine.includes('cache 2.4%') && /ollama\s+\$72\.50\/\$100/.test(ctxLine) && ctxLine.includes('1m [###-------]28%'), ctxLine)
+  const go = lines[ctx + 1]?.trimStart() ?? ''
+  const command = lines[ctx + 2]?.trimStart() ?? ''
+  const openrouter = lines[ctx + 3]?.trimStart() ?? ''
+  assert.ok(go.startsWith('opencode go ') && go.includes('5h [####------]40%') && go.includes('1m [########--]82%'), go)
+  assert.ok(command.startsWith('command code ') && command.includes('$73.03') && command.includes('5h [#---------]12%'), command)
+  assert.ok(openrouter.startsWith('openrouter ') && openrouter.includes('$87.50/$100') && openrouter.includes('1w [########--]80%'), openrouter)
+})
+
+const quotaOff = await renderStatus({ statusBar: { ...DEFAULT_STATUS_BAR, quota: false } }, 140, { quota })
+check('quota display switch hides the quota column without touching ctx/cache', () => {
+  assert.ok(quotaOff.includes('ctx 206k/266k'), quotaOff)
+  assert.ok(!quotaOff.includes('ollama') && !quotaOff.includes('opencode go') && !quotaOff.includes('command code'), quotaOff)
 })
 
 const withSessionId = await renderStatus({
@@ -356,11 +391,10 @@ for (const columns of [84, 100, 126]) {
     contextWindow: 1_000_000,
     lastUsage: { input: 9_000, cacheRead: 100, cacheWrite: 0, output: 6_789 },
   }, columns)
-  check(`compact context stays at the right edge without overlap at ${columns} cols`, () => {
-    const line = narrow.split('\n').find(row => row.includes('ctx 0.9% (9.1k/1.0m)'))
-    assert.ok(line, `missing context usage in:\n${narrow}`)
-    assert.equal(line?.match(/ctx 0\.9% \(9\.1k\/1\.0m\)/g)?.length, 1)
-    assert.ok((line?.replace(/\s+$/, '').length ?? 0) >= columns - 1, `not right-aligned: ${JSON.stringify(line)}`)
+  check(`compact ctx/cache readout renders once under the bar at ${columns} cols`, () => {
+    const line = narrow.split('\n').find(row => row.includes('ctx 9.1k/1.0M 0.9%'))
+    assert.ok(line, `missing context readout in:\n${narrow}`)
+    assert.equal(line?.match(/ctx 9\.1k\/1\.0M 0\.9%/g)?.length, 1)
   })
 }
 
@@ -384,10 +418,11 @@ check('full StatusLine exposes tps, git, title, and token totals', () => {
 })
 
 check('full StatusLine renders context bar and deterministic trajectory wake', () => {
-  // Row 1 is the bar: fill-only, its one text the right-aligned readout
-  // (row 2's ctx field spells the same numbers its own way).
-  const barRow = full.split('\n')[0] ?? ''
-  assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
+  // Row 1 is the fill-only bar (no text); row 2 carries the ctx/cache
+  // numbers now that the in-bar readout is gone.
+  const [barRow = '', ctxRow = ''] = full.split('\n')
+  assert.equal(barRow.trim(), '', `unexpected text on the bar row:\n${barRow}`)
+  assert.ok(ctxRow.includes('ctx 206k/266k 77.4% cache 2.4%'), `missing ctx/cache row:\n${ctxRow}`)
   assert.ok(/[▁▂▃▄▅▆▇█]/.test(full), `missing trajectory glyph in:\n${full}`)
 })
 

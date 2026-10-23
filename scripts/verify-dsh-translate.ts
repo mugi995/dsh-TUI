@@ -102,6 +102,22 @@ check('legacy assistant/chunk → positioned delta (seq, turn, step)', deltas.so
 check('replay drops settled legacy chunks, keeps the orphan tail', of(replay, 'assistant.delta').filter(event => event.seq !== undefined).every(event => event.turn === 4))
 const messages = of(live, 'assistant.message')
 check('assistant/message → assistant.message{canonical, usage}', messages.some(event => event.canonical && event.usage?.input === 1200 && event.usage.cacheRead === 800))
+{
+  const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+  const [message] = translator.translateEvent({
+    type: 'assistant/message',
+    seq: 9001,
+    time: 4000,
+    data: {
+      turn: 1,
+      step: 1,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'streamed' }] },
+      usage: { inputTokens: 10, outputTokens: 100 },
+      stream: [{ type: 'text', time: 1000 }, { type: 'text', time: 3500 }],
+    },
+  } as never)
+  check('assistant/message embedded stream → decodeMs=2500', message?.type === 'assistant.message' && message.decodeMs === 2500)
+}
 check('pre-V3 settlement is non-canonical', messages.some(event => !event.canonical))
 check('interrupted settlement keeps interrupted:true', messages.some(event => event.interrupted === true))
 check('usage keeps unknown counts unknown', messages.some(event => event.usage !== undefined && event.usage.cacheWrite === undefined))

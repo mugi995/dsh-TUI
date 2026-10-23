@@ -1,5 +1,5 @@
-import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
-export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, ContextBarStyle, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, ContextBarStyle, JobGroupFoldMode } from './adapter/ports/channel-display.js'
 
 /** Where a plugin footer field joins the status row, in the list order the
  *  user's `statusBar.pluginFieldsOrder` groups map onto by index. Kept
@@ -24,6 +24,10 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   cwd: true,
   contextUsage: true,
   cache: true,
+  // Subscription quotas: shown by default (the rows are how the account's
+  // remaining allowance is visible without running /quota). Hidden when a
+  // provider has no key/data, and in the minimal UI.
+  quota: true,
   tokens: false,
   cost: true,
   tps: false,
@@ -37,6 +41,10 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   // /settings were missing it entirely. `/settings → statusBar.contextBar`
   // (or cordis.yml `contextBar: false`) still turns it off.
   contextBar: true,
+  // The bar's look is a separate switch: `segments` keeps the five
+  // content-type fills, `blocks` draws the original-TUI single-colour
+  // █/░ gauge. Default unchanged so existing users see no visual drift.
+  contextBarStyle: 'segments',
   activity: false,
   trajectory: false,
   shortcutHint: false,
@@ -53,16 +61,17 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
 const TOOL_BACKGROUNDS = new Set<ToolBackground>(['none', 'subtle', 'strong'])
 const JOB_GROUP_FOLDS = new Set<JobGroupFoldMode>(['auto', 'always', 'never'])
 const SCROLL_GUTTERS = new Set<ScrollGutterMode>(['timeline', 'scrollbar', 'hidden'])
+const CONTEXT_BAR_STYLES = new Set<ContextBarStyle>(['segments', 'blocks'])
 
-/** Every status-bar member but the ordered list; `normalizeStatusBar` copies
+/** Every status-bar member but the ordered list and the bar style; `normalizeStatusBar` copies
  *  these only when the value is a boolean. Derived from the defaults on
  *  purpose: a boolean member added to `StatusBarConfig`/`DEFAULT_STATUS_BAR`
  *  must not have to be repeated here, or `normalizeStatusBar` would silently
  *  drop its configured value. */
-type BooleanStatusBarKey = Exclude<keyof StatusBarConfig, 'pluginFieldsOrder'>
+type BooleanStatusBarKey = Exclude<keyof StatusBarConfig, 'pluginFieldsOrder' | 'contextBarStyle'>
 const STATUS_BAR_BOOLEAN_KEYS: readonly BooleanStatusBarKey[] = (
   Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfig)[]
-).filter((key): key is BooleanStatusBarKey => key !== 'pluginFieldsOrder')
+).filter((key): key is BooleanStatusBarKey => key !== 'pluginFieldsOrder' && key !== 'contextBarStyle')
 
 /** Parsed `statusBar.pluginFieldsOrder`. `invalid` is what the settings screen
  *  refuses to save; the renderer treats it as `all`. */
@@ -189,6 +198,13 @@ export function normalizeScrollGutter(value: unknown): ScrollGutterMode {
     : 'timeline'
 }
 
+/** Same normalize contract as scrollGutter; `segments` is the default. */
+export function normalizeContextBarStyle(value: unknown): ContextBarStyle {
+  return typeof value === 'string' && CONTEXT_BAR_STYLES.has(value as ContextBarStyle)
+    ? value as ContextBarStyle
+    : 'segments'
+}
+
 /** Merge a partial settings value over the stable status-bar defaults. */
 export function normalizeStatusBar(value: unknown): StatusBarConfig {
   const normalized: StatusBarConfig = { ...DEFAULT_STATUS_BAR }
@@ -198,9 +214,11 @@ export function normalizeStatusBar(value: unknown): StatusBarConfig {
   for (const key of STATUS_BAR_BOOLEAN_KEYS) {
     if (typeof input[key] === 'boolean') normalized[key] = input[key]
   }
-  // The one non-boolean member: a hand-written invalid list stays verbatim so
-  // the settings screen can show it, and the renderer reads it as `all`.
+  // The two non-boolean members: a hand-written invalid list stays verbatim so
+  // the settings screen can show it, and the renderer reads it as `all`; an
+  // unknown bar style falls back to the default segments.
   normalized.pluginFieldsOrder = normalizePluginFieldsOrder(input.pluginFieldsOrder ?? DEFAULT_STATUS_BAR.pluginFieldsOrder)
+  normalized.contextBarStyle = normalizeContextBarStyle(input.contextBarStyle)
   return normalized
 }
 

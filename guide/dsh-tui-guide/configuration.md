@@ -148,12 +148,14 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 | `btw.contextTurns` | `4`（数值，1–8） | `/btw` 追问时带上的最近已完成问答组数；更早的组不进请求，线程和面板里仍保留。立即生效 |
 | `btw.contextBudget` | `24000`（数值，1000–200000） | `/btw` 追问携带的最近问答总字符数上限，超出时从最旧的一组开始丢。立即生效 |
 | `codeFrameStyle` | `light` | 回复里代码块的边框：`light` 只有顶部标签和左侧竖线，不多占行；`full` 是封闭的框。终端太窄时总是用纯文本 fence。立即生效 |
-| `turnUsageRow` | `false`（布尔） | 每回合末尾显示一行右对齐的用量（输入/输出、缓存、耗时、重试）；关闭时 `/tokens`、`/status` 和底栏悬停照样能看到这些数字 |
+| `turnUsageRow` | `false`（布尔） | 回复末尾的摘要形态：关闭（默认）显示紧凑的 `模型 / effort · 耗时 · decode tok/s`；开启后改为完整回合账本（输入/输出、缓存、重试）并附 decode tok/s。`/tokens`、`/status` 和底栏悬停不受影响 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `upstreamRetry` | `true` | 为当前会话实际使用的 `llm-pi-ai` 渠道播种重试策略（最多重试 5 次，失败码覆盖传输类中断、含 `STREAM_CLOSED` 上游断链）：每次绑定（启动、`/model` 切换、resume）时检查该渠道，未声明 `retryPolicy` 才写入官方 `llm-pi-ai` settings 分节——内核 `llm-retry` 插件执行的就是这份策略。从不写闲置渠道；已显式声明 `retryPolicy` 的渠道（cordis.yml 或手改 settings）不会被覆盖；`false` 整体关闭 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |
-| `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行。与 `/settings → statusBar.contextBar`（默认开）同时为开才显示 |
+| `contextBar` | `true` | 输入框下方的上下文进度条；`false` 隐藏该行。画法由 `statusBar.contextBarStyle` 决定。与 `/settings → statusBar.contextBar`（默认开）同时为开才显示 |
+| `statusBar.contextBarStyle` | `segments` | 上下文进度条的画法：`segments`（默认）按内容类型分段着色；`blocks` 为单色 `█`/`░` 字符计量条，悬停图例不带色块。也可经 `/settings → Context bar style` 修改，立即生效 |
+| `statusBar.quota` | `true` | 在 ctx/cache 行右侧显示 Ollama Cloud / OpenCode Go / Command Code / OpenRouter 的订阅额度行；无数据或极简界面时不显示。也可经 `/settings → Show subscription quotas` 修改 |
 | `fullscreen` | `true`（0.9.0 起出厂默认） | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；优先级：`DSH_TUI_PRESET`（本次运行）> `/preset` 持久化选择 > 本字段（部署默认值）> 名册默认 |

@@ -6,6 +6,7 @@ import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHost, TuiSettingsSection } from './channel-settings.js'
+import type { QuotaSnapshot } from '../../quota/types.js'
 
 /** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
 export interface BackendAuthHost {
@@ -681,6 +682,10 @@ export interface ChannelUi {
    *  queries the official balance endpoint. The key is used only for the
    *  request header — never logged, printed or persisted. */
   balanceInfo(): Promise<BalanceResult>
+  /** Subscription quota snapshot for `/quota` (Ollama Cloud, OpenCode Go,
+   *  Command Code), resolved through the credentials seam and each CLI's own
+   *  auth file. Optional: compositions without the quota client omit it. */
+  quotaInfo(): Promise<QuotaSnapshot>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */

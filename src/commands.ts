@@ -106,6 +106,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
   { name: 'balance', description: 'Show DeepSeek account balance' },
+  { name: 'quota', description: 'Show subscription quotas (Ollama Cloud / OpenCode Go / Command Code / OpenRouter)' },
   { name: 'provider', description: 'Add, edit or delete an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },

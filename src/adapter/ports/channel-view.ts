@@ -515,6 +515,10 @@ export interface TurnUsageSummary {
   readonly retries: number
   /** turn.start → turn.end wall-clock span (ms). */
   readonly durationMs: number
+  /** Decode speed of the turn's streaming steps (output tokens / decode ms),
+   *  sampled at turn.end; absent when the backend never streamed a measured
+   *  decode span (e.g. a non-streamed reply). */
+  readonly decodeTps?: number
   /** Model id the turn's last request ran on, when the backend reported
    * one; absent rather than guessed from the session model. */
   readonly model?: string

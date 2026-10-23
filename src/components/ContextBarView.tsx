@@ -4,16 +4,12 @@ import type { Color } from '../ink/styles.js'
 import { getTheme } from '../theme.js'
 import {
   FREE_SEGMENT_FILL,
-  FREE_SEGMENT_TEXT,
   USED_SEGMENTS,
   usedSegmentColor,
   barSegments,
   contextBarColumns,
-  contextBarReadout,
   contextBarSegmentColors,
   contextBarUsedColor,
-  contextPressureStep,
-  rightAlignBarText,
   type ContextSegments,
 } from '../screens/StatusMetrics.js'
 import type { ContextBreakdown } from '../adapter/ports/channel-view.js'
@@ -25,8 +21,9 @@ import type { ContextBreakdown } from '../adapter/ports/channel-view.js'
  *
  * A used segment is its fill color and nothing else — no label (community
  * feedback on the old `s`/`p`/`t` letters: they read as noise on a row that is
- * already decorative, and they never fit the narrow segments anyway). The only
- * text left is the free segment's right-aligned usage readout.
+ * already decorative, and they never fit the narrow segments anyway). The bar
+ * carries no text at all now; the ctx/cache readout moved to the line directly
+ * under it.
  *
  * ONE hover target for the whole bar rather than one per segment. The colors
  * are named where there is room for words: hovering anywhere on the bar parks
@@ -58,7 +55,7 @@ export function ContextBarView({
   /** Total bar width in terminal columns. */
   width: number
   /** Theme overrides for the free segment (light theme passes its own). */
-  colors?: { freeFill: Color; freeText: Color }
+  colors?: { freeFill: Color }
   /** Hover signal: true while the pointer is anywhere on the bar, false on
    *  leave. Absent handlers render a static bar (tests, headless embeds). */
   onHover?: (hovered: boolean) => void
@@ -79,13 +76,6 @@ export function ContextBarView({
     contextWindow,
     width,
   )
-  // The readout is the bar's only text, and its one pressure signal: amber
-  // from 80% occupancy, red from 95% (the footer's shared thresholds). The
-  // theme key wins over the free-text color, which stays for comfortable
-  // occupancy.
-  const readout = contextBarReadout(usedTokens, contextWindow)
-  const pressure = contextPressureStep((usedTokens / contextWindow) * 100)
-
   const nodes: React.ReactNode[] = []
   for (const [index, segment] of USED_SEGMENTS.entries()) {
     const segmentWidth = columns.used[index] ?? 0
@@ -128,11 +118,7 @@ export function ContextBarView({
         height={1}
         flexShrink={0}
         backgroundColor={colors?.freeFill ?? FREE_SEGMENT_FILL}
-      >
-        <Text color={pressure ?? colors?.freeText ?? FREE_SEGMENT_TEXT} wrap="truncate">
-          {rightAlignBarText(readout, freeWidth)}
-        </Text>
-      </Box>,
+      />,
     )
   }
 
@@ -145,6 +131,54 @@ export function ContextBarView({
       onMouseLeave={onHover === undefined ? undefined : () => onHover(false)}
     >
       {nodes}
+    </Box>
+  )
+}
+
+/**
+ * The single-colour counterpart of {@link ContextBarView} (settings
+ * `statusBar.contextBarStyle: 'blocks'`): one line of `█` for the used span
+ * and `░` for the free span — the original-TUI block gauge, without the five
+ * content-type colors (the hover legend still names the composition) and
+ * without the in-bar readout (the ctx/cache row below carries it).
+ *
+ * Geometry mirrors the segmented bar: the used span is the occupancy fraction
+ * of the full width, so the right edge keeps its column. The whole line uses
+ * one theme colour by design; pressure thresholds and per-segment tints
+ * belong to the segmented style only.
+ */
+export function BlockContextBar({
+  usedTokens,
+  contextWindow,
+  width,
+  onHover,
+}: {
+  /** Measured occupancy, driving both fill length and readout. */
+  usedTokens: number
+  /** The context window size in tokens. */
+  contextWindow: number
+  /** Total bar width in terminal columns. */
+  width: number
+  /** Hover signal: true while the pointer is anywhere on the bar, false on
+   *  leave. Absent handlers render a static bar (tests, headless embeds). */
+  onHover?: (hovered: boolean) => void
+}): React.ReactNode {
+  if (width <= 0 || contextWindow <= 0) return null
+  const ratio = Math.min(1, Math.max(0, usedTokens / contextWindow))
+  const usedWidth = Math.min(width, Math.max(0, Math.round(width * ratio)))
+  const freeWidth = width - usedWidth
+  return (
+    <Box
+      flexDirection="row"
+      flexShrink={0}
+      width={width}
+      onMouseEnter={onHover === undefined ? undefined : () => onHover(true)}
+      onMouseLeave={onHover === undefined ? undefined : () => onHover(false)}
+    >
+      <Text color="inactiveShimmer" wrap="truncate">
+        {'█'.repeat(usedWidth)}
+        {'░'.repeat(freeWidth)}
+      </Text>
     </Box>
   )
 }

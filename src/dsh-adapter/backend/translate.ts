@@ -392,6 +392,16 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     return events
   }
 
+  /** First→last chunk span of a durable V3 `assistant/message` stream. */
+  const decodeSpanOf = (stream: unknown): number | undefined => {
+    if (!Array.isArray(stream) || stream.length < 2) return undefined
+    const first = (stream[0] as { time?: unknown } | undefined)?.time
+    const last = (stream[stream.length - 1] as { time?: unknown } | undefined)?.time
+    if (typeof first !== 'number' || typeof last !== 'number') return undefined
+    const span = last - first
+    return span > 0 ? span : undefined
+  }
+
   /** Translate one durable session event (live or as part of a replay). */
   const translateEvent = (event: SessionEvent): readonly AgentEvent[] => {
     const type = (event as { type: string }).type
@@ -411,6 +421,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       case 'assistant/message': {
         const data = event.data
         const content = data.message.content
+        const decodeMs = decodeSpanOf((data as { stream?: unknown }).stream)
         return [{
           type: 'assistant.message',
           seq: event.seq,
@@ -419,6 +430,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
           step: data.step,
           attemptId: `seq:${event.seq}`,
           time: event.time,
+          ...(decodeMs === undefined ? {} : { decodeMs }),
           blocks: content,
           images: transcriptImagesOf(content, deps.attachments),
           usage: usageDelta(data.usage),

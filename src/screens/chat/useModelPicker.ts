@@ -71,11 +71,22 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     tabFocus.current.set(value.provider, value.index)
     setCursor(value)
   }
-  const reset = (): void => {
+  const reset = (landingProvider?: string): void => {
     const landing = modelPickerLanding(models, channel.provider, channel.model, recents)
     activeRef.current = true
     tabFocus.current.clear()
-    const initial = providerTabs ? { provider: landing.group ?? RECENTS_GROUP_PROVIDER, index: landing.index }
+    // A caller may ask for one provider's list (the prompt border's provider
+    // part); without one, land on the preserved recents group. The provider
+    // key is applied even before the catalog arrives — `normalize` keeps it
+    // once the provider shows up in the groups, and falls back to recents if
+    // the route is absent from this catalog.
+    const requestedProvider = providerTabs && landingProvider !== undefined && landingProvider !== ''
+    const initialProvider = requestedProvider
+      ? landingProvider
+      : landing.group ?? RECENTS_GROUP_PROVIDER
+    // A provider click starts at that list's first row; the ordinary /model
+    // landing keeps the recents index it has always used.
+    const initial = providerTabs ? { provider: initialProvider, index: requestedProvider ? 0 : landing.index }
       : { provider: channel.provider, index: -1 }
     cursorRef.current = initial
     setCursor(initial)

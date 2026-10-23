@@ -27,6 +27,16 @@ process.env.FORCE_COLOR = '3'
 // locale, none of which a CI runner or another developer's machine is obliged
 // to agree with.
 process.env.DSH_TUI_LANG = 'zh'
+// Isolate persisted UI prefs (panel layout, status fields, minimal UI): the
+// scene geometry below is the default layout, not the developer's ~/.dsh-tui.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'verify-trace-scene-'))
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+}
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { TrajectoryScene }, { Chat }, { QuestionStore }, { stringWidth }, { settle, settled, sleep }] =
   await Promise.all([

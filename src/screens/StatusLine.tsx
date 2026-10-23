@@ -3,7 +3,7 @@ import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
-import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
+import { applyPluginFieldsOrder, DEFAULT_STATUS_BAR, normalizeStatusBar, type ContextBarStyle, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
@@ -33,18 +33,18 @@ import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { getTheme, isLightThemeActive } from '../theme.js'
-import { ContextBarView } from '../components/ContextBarView.js'
+import { BlockContextBar, ContextBarView } from '../components/ContextBarView.js'
+import { QuotaFooter } from '../components/QuotaFooter.js'
+import type { QuotaSnapshot } from '../quota/types.js'
 import { TooltipTarget } from '../components/Tooltip.js'
-import { formatProject } from '../sessions/format.js'
-import { homeDir } from '../utils/paths.js'
 import {
   USED_SEGMENTS,
   channelContextOccupancy,
+  contextBarReadout,
   attributeBarTokens,
   barSegments,
   contextBarBreakdown,
   contextBarSegmentColors,
-  renderMiniContextBar,
   renderTpsGauge,
   renderTpsSparkline,
   speedColor,
@@ -54,20 +54,22 @@ import type { WaveBand } from '../dsh-adapter/types.js'
 import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
 
 /**
- * The footer under the prompt input: the segmented context progress bar on
- * its own first line, the
- * status line below (left group: model · tokens · think level · cache · tps
- * gauge/sparkline; right group: git · cwd · title · short session id,
- * right-aligned), and the
- * mode/hint line last. The right side of the footer shows the latest
- * transient notification (errors in red, warnings in amber).
+ * The footer under the prompt input: the context progress bar on its own
+ * first line (five themed segments, or the single-colour block gauge — see
+ * `statusBar.contextBarStyle`), the ctx/cache readout directly under it
+ * (`ctx 13k/64k 19.5% cache 2.4%`), the status line below (left group:
+ * tps · mode · tokens; right group: git · title · short session id,
+ * right-aligned), and the mode/hint line last. Provider/model/effort and
+ * cwd no longer live here: Chat puts them on the prompt's border
+ * (`PromptInput`'s `modelLabel` / `cwdLabel`). The right side of the footer
+ * shows the latest transient notification (errors in red, warnings in amber).
  *
- * Every metric field is hover-aware (fullscreen mouse): dwelling on a field
- * swaps the ctx readout for a mini pressure gauge and parks that field's
- * detailed breakdown on the supplemental row where the idle hint lives —
- * the footer stays one line tall, the detail is a peek, not a layout
- * change. The context bar answers the same way: it carries no labels of its
- * own, so hovering it is how its colors get their names and numbers.
+ * Metric fields are hover-aware (fullscreen mouse): dwelling on a field
+ * parks that field's detailed breakdown on the supplemental row where the
+ * idle hint lives — the footer stays one line tall, the detail is a peek,
+ * not a layout change. The context bar answers the same way: it carries no
+ * labels of its own, so hovering it is how its colors get their names and
+ * numbers.
  */
 
 /**
@@ -90,6 +92,7 @@ const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
   model: true,
   cwd: true,
   contextBar: false,
+  quota: false,
   activity: false,
   trajectory: false,
   shortcutHint: false,
@@ -118,19 +121,14 @@ const FIELD_TONE_COLOR: Record<
 /** Footer fields that answer a hover with a supplemental-row detail.
  *  The context bar reports the single `bar` target (see ContextBarView). */
 type BuiltinHoverTarget =
-  | 'ctx'
   | 'mode'
-  | 'effort'
-  | 'cache'
   | 'tps'
   | 'tokens'
   | 'cost'
   | 'goal'
   | 'jobs'
-  | 'model'
   | 'git'
   | 'sessionId'
-  | 'cwd'
   | 'title'
   | 'bar'
 
@@ -218,11 +216,10 @@ export function StatusLine({
   selectionActive = false,
   helpOpen = false,
   backendMode,
-  modelPicker,
-  effortPicker,
   wake,
   activity: projectedActivity,
   pluginFields,
+  quota,
 }: {
   channel: Channel
   selectionActive?: boolean
@@ -233,6 +230,10 @@ export function StatusLine({
    *  `right-tail` (the row's right edge). Absent/empty renders exactly the
    *  footer this seam found: no extra Box, no gap, no flex change. */
   pluginFields?: readonly TuiStatusFieldEntry[]
+  /** Subscription quota snapshot (`/quota`) rendered in the right column
+   *  of the ctx/cache readout. Absent until the first fetch resolves; no row
+   *  while empty. */
+  quota?: QuotaSnapshot
   /** The backend's OWN permission mode (the typed `modes` capability):
    *  `id` is the backend mode id (default / acceptEdits / plan /
    *  bypassPermissions / dontAsk / auto …), `name` the label the backend
@@ -247,20 +248,6 @@ export function StatusLine({
   backendMode?: {
     readonly id: string
     readonly name: string
-    readonly onOpen: () => void
-  }
-  /** The model segment's click target: the same /model picker the command
-   *  opens. Present only when the backend serves a model catalog
-   *  (backendCapabilities.models — DSH and the Claude backend both do);
-   *  absent = the segment renders exactly as before, and its hover detail
-   *  keeps the pure route readout without the click affordance line. */
-  modelPicker?: {
-    readonly onOpen: () => void
-  }
-  /** Same contract for the think-level segment and /effort: present only
-   *  when the backend serves the effort capability. The hover id rides
-   *  with it — the segment's whole detail line IS the affordance. */
-  effortPicker?: {
     readonly onOpen: () => void
   }
   /** Activity value published by the working-activity plugin for this session.
@@ -311,11 +298,6 @@ export function StatusLine({
     : NO_PLUGIN_FIELDS
   const inSlot = (slot: TuiStatusFieldSlot): FieldPart[] =>
     visibleFields.filter(field => field.slot === slot).map(toFieldPart)
-  // Provider workspaces expose a remote display path alongside a host alias;
-  // only the local target has identical cwd/displayCwd values to fold.
-  const displayCwd = channel.displayCwd === channel.cwd
-    ? formatProject(channel.displayCwd, homeDir())
-    : channel.displayCwd
   const usage = channel.lastUsage
   // ONE occupancy reading behind every ctx surface in this footer (the field,
   // its hover gauge, the segmented bar, the working line's pressure prefix):
@@ -326,18 +308,7 @@ export function StatusLine({
   const occupancy = channelContextOccupancy(channel)
   const contextUsed = occupancy?.usedTokens
   const contextWindow = occupancy?.contextWindow
-  const contextParts: FieldPart[] = []
-
-  if (statusBar.thinking && channel.reasoningEffort !== undefined) {
-    contextParts.push({
-      key: 'effort',
-      // The hover id rides only with the click target: the segment's whole
-      // detail line IS the affordance (level + /effort), so promising it
-      // without the picker behind it would be a lie.
-      ...(effortPicker === undefined ? {} : { id: 'effort' as const, onClick: effortPicker.onOpen }),
-      node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
-    })
-  }
+  const modeParts: FieldPart[] = []
   const modeNeedsExplicitMarker = channel.mode.plan === true
     || channel.mode.sandbox === 'danger-full-access'
     || channel.mode.approval === 'never'
@@ -365,7 +336,7 @@ export function StatusLine({
       : backendMode.id === 'bypassPermissions' || backendMode.id === 'dontAsk'
         ? 'warning'
         : backendMode.id === 'plan' ? 'planMode' : 'inactiveShimmer'
-    contextParts.push({
+    modeParts.push({
       key: 'mode',
       ...(backendMode === undefined ? {} : { id: 'mode' as const, onClick: backendMode.onOpen }),
       node: (
@@ -378,63 +349,31 @@ export function StatusLine({
     })
   }
 
-  const formattedContext = statusBar.contextUsage
-    ? formatContextUsage(contextUsed, contextWindow, statusBar.compact)
-    : undefined
-  // The ctx field's two faces: the idle readout, and the hover state — an
-  // in-place pressure bar (the user-liked "text becomes a bar" morph).
-  //
-  // WIDTH-STABLE BY CONSTRUCTION: the idle variable part is
-  // `P + " (" + C + ")"` (either order; P = percent text, C = counts) —
-  // len(P)+len(C)+3 cells. The hover variant is `▕+bar+▏ + " " + P` —
-  // 3+barLen+len(P) cells. Sizing barLen = len(C) makes them equal, so the
-  // morph swaps glyphs in place and NO sibling field, separator, or the
-  // right-aligned group moves a single cell (the first attempt used a fixed
-  // 10-cell gauge and made the whole row jump).
-  const ctxParts = (() => {
-    if (formattedContext === undefined) return undefined
-    const open = formattedContext.indexOf(' (')
-    if (open < 0) return undefined
-    const first = formattedContext.slice(0, open)
-    const second = formattedContext.slice(open + 2, -1)
-    if (first.endsWith('%')) return { percent: first, counts: second }
-    if (second.endsWith('%')) return { percent: second, counts: first }
-    return undefined
+  // The context/cache readout sits on its own row directly under the gauge;
+  // subscription quota rows sit in that row's right column
+  // (the original TUI's second line): `ctx 13k/64k 19.5% cache 2.4%`, with
+  // `--/-- 0%` while the occupancy is unknown. The footer no longer carries
+  // a ctx or cache field, nor their hover details.
+  const ctxLine = (() => {
+    if (!statusBar.contextUsage && !statusBar.cache) return undefined
+    const known = contextUsed !== undefined && contextWindow !== undefined && contextWindow > 0
+    // The same compact formatter the bar used to print (`1.0M`, not `1m`).
+    const readout = known ? (contextBarReadout(contextUsed, contextWindow)[0] ?? '') : '--/-- 0%'
+    const cacheRate = formatCacheHitRate(usage) ?? '0%'
+    return (
+      <Box flexDirection="row" flexShrink={0} overflow="hidden">
+        <Text color="inactiveShimmer" wrap="truncate">
+          {statusBar.contextUsage
+            ? <><Text dimColor>ctx </Text>{readout}</>
+            : null}
+          {statusBar.contextUsage && statusBar.cache ? ' ' : null}
+          {statusBar.cache
+            ? <><Text dimColor>cache </Text>{cacheRate}</>
+            : null}
+        </Text>
+      </Box>
+    )
   })()
-  const ctxHoverBarWidth = ctxParts?.counts.length ?? 0
-  const ctxNode = formattedContext === undefined
-    ? undefined
-    : hover === 'ctx' &&
-        ctxParts !== undefined &&
-        ctxHoverBarWidth > 0 &&
-        contextUsed !== undefined &&
-        contextWindow !== undefined
-      ? (
-        <Text color="inactiveShimmer">
-          <Text dimColor>ctx </Text>
-          {renderMiniContextBar(contextUsed, contextWindow, ctxHoverBarWidth)}
-          {' '}{ctxParts.percent}
-        </Text>
-      )
-      : (
-        <Text color="inactiveShimmer">
-          <Text dimColor>ctx </Text>{formattedContext}
-        </Text>
-      )
-  if (statusBar.cache) {
-    const cacheRate = formatCacheHitRate(usage)
-    if (cacheRate !== undefined) {
-      contextParts.push({
-        key: 'cache',
-        id: 'cache',
-        node: (
-          <Text color="inactiveShimmer">
-            <Text dimColor>{t('status-cache-label')}</Text>{cacheRate}
-          </Text>
-        ),
-      })
-    }
-  }
 
   let tpsPart: FieldPart | undefined
   if (statusBar.tps && channel.tps !== undefined) {
@@ -507,12 +446,9 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     : undefined
   const builtinLeft: FieldPart[] = [
     ...(startingPart !== undefined ? [startingPart] : []),
-    ...(statusBar.model
-      ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
-      : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
-    ...contextParts,
+    ...modeParts,
     ...(statusBar.tokens
       ? [{
           key: 'tokens',
@@ -601,17 +537,6 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           },
         ]
       : []),
-    ...(statusBar.cwd
-      ? [{
-          key: 'cwd',
-          id: 'cwd' as const,
-          node: (
-            <Text color="inactiveShimmer">
-              {statusBar.compact ? basename(displayCwd) : displayCwd}
-            </Text>
-          ),
-        }]
-      : []),
     ...(statusBar.sessionTitle && channel.sessionTitle
       ? [{
           key: 'title',
@@ -672,12 +597,12 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // 空段的深色兜底：deepseek 档冷灰、claude 档暖墨（品牌档见 branding.ts）。
   // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（pink-day、用户/插件
   // 色板也可以是浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
-  const barColors: { freeFill: Color; freeText: Color } | undefined =
+  const barColors: { freeFill: Color } | undefined =
     isLightThemeActive(themeName)
       ? undefined
       : getActiveBrand() === 'claude'
-        ? { freeFill: '#24221F', freeText: '#B8B2A8' }
-        : { freeFill: '#2E3440', freeText: '#8D95A6' }
+        ? { freeFill: '#24221F' }
+        : { freeFill: '#2E3440' }
   const barVisible =
     statusBar.contextBar &&
     channel.contextBarEnabled &&
@@ -696,8 +621,8 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     columns,
     barColors,
     backendMode,
-    modelPicker,
     contextBarSegmentColors(getTheme(themeName)),
+    statusBar.contextBarStyle,
   )
   const trailer: React.ReactNode = detail !== null
     ? detail
@@ -706,11 +631,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       : null
 
   const compactFields = [...leftFields, ...rightFields]
-  const fullLeftFields = [
-    ...leftFields,
-    ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx' as const, node: ctxNode }] : []),
-  ]
-  const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined
+  const hasStatusFields = compactFields.length > 0
   // The supplemental row is PERMANENTLY mounted (height pinned to 1)
   // whenever the footer carries hoverable chrome — mounting it from nothing
   // on hover is what made the footer grow mid-gesture and shoved the
@@ -737,40 +658,59 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     // ladder of widths and asserts the wake reaches the right margin at each.
     <Box paddingX={1} width={columns} flexShrink={0}>
       <Box flexDirection="column" width="100%">
-        {/* Row 1: segmented context bar, its own line, first (pi-nano-context
-            placement — the bar sits directly under the transcript). Rendered
-            as per-segment Boxes so the fill can react to the pointer; the bar
-            carries no labels — hovering it parks the breakdown of every
-            content type on the supplemental row. */}
+        {/* Row 1: context bar, its own line, first (pi-nano-context placement —
+            the bar sits directly under the transcript). The segmented style
+            renders per-segment Boxes so the fill can react to the pointer; the
+            blocks style (settings `statusBar.contextBarStyle`) is one monochrome
+            █/░ line. Either way the bar carries no labels — hovering it parks the
+            breakdown of every content type on the supplemental row. */}
         {barVisible ? (
-          <ContextBarView
-            segments={channel.contextSegments}
-            breakdown={channel.contextBreakdown}
-            usedTokens={contextUsed ?? 0}
-            contextWindow={contextWindow ?? 0}
-            width={barWidth}
-            colors={barColors}
-            onHover={hovered =>
-              setHover(current =>
-                hovered ? 'bar' : current === 'bar' ? null : current)}
-          />
+          statusBar.contextBarStyle === 'blocks' ? (
+            <BlockContextBar
+              usedTokens={contextUsed ?? 0}
+              contextWindow={contextWindow ?? 0}
+              width={barWidth}
+              onHover={hovered =>
+                setHover(current =>
+                  hovered ? 'bar' : current === 'bar' ? null : current)}
+            />
+          ) : (
+            <ContextBarView
+              segments={channel.contextSegments}
+              breakdown={channel.contextBreakdown}
+              usedTokens={contextUsed ?? 0}
+              contextWindow={contextWindow ?? 0}
+              width={barWidth}
+              colors={barColors}
+              onHover={hovered =>
+                setHover(current =>
+                  hovered ? 'bar' : current === 'bar' ? null : current)}
+            />
+          )
         ) : null}
-        {/* Row 2: optional status fields — every field is independently gated. */}
+        {/* Row 2: the ctx/cache readout on the left and the subscription
+            quota rows on the right. The quota block is one column of rows, so
+            its first row sits beside the ctx/cache line while the remaining
+            windows stack under it. Hidden in the minimal UI. */}
+        <Box flexDirection="row" width="100%" flexShrink={0} overflow="hidden">
+          {ctxLine}
+          {statusBar.quota && channel.minimalUi !== true ? (
+            <Box marginLeft={2} flexShrink={1} minWidth={0} overflow="hidden">
+              <QuotaFooter snapshot={quota} />
+            </Box>
+          ) : null}
+        </Box>
+        {/* Row 3: optional status fields — every field is independently gated. */}
         {hasStatusFields ? statusBar.compact ? (
           <Box flexDirection="row" justifyContent="space-between" gap={2}>
             <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
               <FieldLine parts={compactFields} hoverProps={hoverProps} />
             </Box>
-            {ctxNode !== undefined ? (
-              <Box flexShrink={0} {...hoverProps('ctx')}>
-                <Text wrap="truncate">{ctxNode}</Text>
-              </Box>
-            ) : null}
           </Box>
         ) : (
           <Box flexDirection="row" justifyContent="space-between" gap={2}>
             <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
-              <FieldLine parts={fullLeftFields} hoverProps={hoverProps} />
+              <FieldLine parts={leftFields} hoverProps={hoverProps} />
             </Box>
             <Box
               justifyContent="flex-end"
@@ -851,10 +791,10 @@ function buildHoverDetail(
   occupancy: ContextOccupancy | undefined,
   usage: UsageSnapshot | undefined,
   columns: number,
-  barColors: { freeFill: Color; freeText: Color } | undefined,
+  barColors: { freeFill: Color } | undefined,
   backendMode: { readonly name: string } | undefined,
-  modelPicker: { readonly onOpen: () => void } | undefined,
   usedColors: readonly Color[],
+  barStyle: ContextBarStyle,
 ): React.ReactNode | null {
   if (hover === null) return null
   // Plugin fields first: their detail is verbatim host-sanitized text. A field
@@ -887,6 +827,20 @@ function buildHoverDetail(
       { used: usedColors, freeFill: barColors?.freeFill },
     )
     if (entries.length === 0) return null
+    // The blocks bar is monochrome, so a color chip would name nothing on
+    // screen: its legend is the labels and token counts alone.
+    if (barStyle === 'blocks') {
+      return (
+        <Text wrap="truncate">
+          {entries.map((entry, index) => (
+            <React.Fragment key={entry.key}>
+              {index > 0 ? dim(separator) : null}
+              {entry.label}
+            </React.Fragment>
+          ))}
+        </Text>
+      )
+    }
     return (
       <Text wrap="truncate">
         {entries.map((entry, index) => (
@@ -901,32 +855,6 @@ function buildHoverDetail(
   }
 
   switch (hover) {
-    case 'ctx': {
-      if (contextUsed === undefined || window === undefined || window <= 0) return null
-      const free = Math.max(0, window - contextUsed)
-      // The hover payoff for the ctx ask: percent + counts + free, then the
-      // segment breakdown as the truncate-able tail (no bar — the row's
-      // in-place morph and the segment bar above already carry the gauge).
-      // Match the bar's attributed shares, including its measured-used
-      // fallback when no content category can be attributed.
-      const sizes = attributeBarTokens(
-        barSegments(channel.contextSegments, channel.contextBreakdown),
-        contextUsed,
-      )
-      const hasComposition = USED_SEGMENTS.some(segment => sizes[segment.key] > 0)
-      const segments = hasComposition
-        ? USED_SEGMENTS.map(
-          segment => `${segment.labels[1] ?? segment.key} ${formatTokens(sizes[segment.key])}`,
-        ).join(' · ')
-        : `${t('context-bar-used')} ${formatTokens(contextUsed)}`
-      return (
-        <Text wrap="truncate">
-          {((contextUsed / window) * 100).toFixed(1)}% ·{' '}
-          {formatTokens(contextUsed)}/{formatTokens(window)} · {dim('free ')}{formatTokens(free)}
-          {' · '}{segments}
-        </Text>
-      )
-    }
     case 'mode': {
       // Only the mode segment carries the hover id (its click target); the
       // detail names the field and the affordance at the moment of asking.
@@ -935,37 +863,6 @@ function buildHoverDetail(
       return (
         <Text wrap="truncate">
           {dim('mode ')}{backendMode?.name ?? modeDisplayName(channel.mode)} · {t('status-detail-mode')}
-        </Text>
-      )
-    }
-    case 'effort': {
-      // The think-level segment's whole detail line IS the affordance (the
-      // hover id rides with the click target — see the field above), so the
-      // case is unreachable without the picker behind it.
-      return (
-        <Text wrap="truncate">
-          {dim('effort ')}{channel.reasoningEffort} · {t('status-detail-effort')}
-        </Text>
-      )
-    }
-    case 'cache': {
-      const rate = formatCacheHitRate(usage)
-      if (usage === undefined || rate === undefined) return null
-      // The cache split is optional on the wire (`cacheReadTokens?` /
-      // `cacheWriteTokens?`), and a route that never writes the prompt cache
-      // reports a zero or omits the field — every DeepSeek route does one or
-      // the other. A zero component says nothing the rate does not, and
-      // rendering the absence as `0` asserts a number no provider sent.
-      return (
-        <Text wrap="truncate">
-          {dim('cache ')}{rate}
-          {usage.cacheRead > 0
-            ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
-            : null}
-          {usage.cacheWrite > 0
-            ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
-            : null}
-          {' · '}{dim('input ')}{formatTokens(usage.input)}
         </Text>
       )
     }
@@ -1083,27 +980,6 @@ function buildHoverDetail(
         </Text>
       )
     }
-    case 'model': {
-      // When a display name masks the raw id (modelDisplay maps a
-      // friendly/alias name), the hover shows BOTH — the requested alias the
-      // user picked and the raw id the route runs. Identical strings render
-      // once; nothing is invented when no mapping is known.
-      return (
-        <Text wrap="truncate">
-          {dim('model ')}{channel.modelDisplay ?? channel.model}
-          {channel.modelDisplay !== undefined && channel.modelDisplay !== channel.model
-            ? <>{' ('}{channel.model}{')'}</>
-            : null}
-          {' · '}{dim('provider ')}{channel.provider}
-          {channel.contextWindow !== undefined
-            ? <> · {dim('ctx ')}{formatTokens(channel.contextWindow)}</>
-            : null}
-          {modelPicker !== undefined
-            ? <> · {t('status-detail-model')}</>
-            : null}
-        </Text>
-      )
-    }
     case 'git': {
       if (channel.gitBranch === undefined) return null
       return (
@@ -1116,12 +992,6 @@ function buildHoverDetail(
       return (
         <Text wrap="truncate">
           {dim('# ')}{channel.sessionRef?.sessionId ?? channel.agentId} · {t('status-detail-session-id')}
-        </Text>
-      )
-    case 'cwd':
-      return (
-        <Text wrap="truncate">
-          {dim('cwd ')}{channel.displayCwd}
         </Text>
       )
     case 'title':
@@ -1159,9 +1029,4 @@ export function formatSelectionBadge(
   if (selection === undefined || selection.isEmpty === true) return undefined
   const lines = selection.endLine - selection.startLine + 1
   return `⧉ ${lines} ${lines === 1 ? 'line' : 'lines'} selected`
-}
-
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/)
-  return parts[parts.length - 1] ?? path
 }

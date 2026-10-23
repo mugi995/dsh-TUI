@@ -12,6 +12,7 @@ import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
 import type { ContextBreakdown, ContextOccupancy } from '../adapter/ports/channel-view.js'
+import type { ContextBarStyle } from '../adapter/ports/channel-display.js'
 import { resolveContextOccupancy } from '../dsh-adapter/context-occupancy.js'
 import { getActiveBrand } from '../branding.js'
 import { getActiveThemeName, isLightThemeActive } from '../theme.js'
@@ -132,21 +133,15 @@ export function contextBarUsedColor(colors?: readonly Color[]): Color {
 /** Local token estimates per context content type (system, prompt, assistant, thinking, tools). */
 export type ContextSegments = Record<(typeof USED_SEGMENTS)[number]['key'], number>
 
-/** Free-segment colors: light grey fill, dark grey readout. Exported so the
- *  JSX bar (ContextBarView) and the hover chip paint the same free color the
- *  ANSI path does instead of re-declaring the hex. */
+/** Free-segment fill. Exported so the JSX bar (ContextBarView) and the hover
+ *  chip paint the same free color the ANSI path does instead of re-declaring
+ *  the hex. */
 export const FREE_SEGMENT_FILL = '#E8E8E8'
-export const FREE_SEGMENT_TEXT = '#4A4A4A'
-
-const ANSI_RE = /\x1b\[[0-9;]*m/g
-const stripAnsi = (text: string): string => text.replace(ANSI_RE, '')
-const plainWidth = (text: string): number => Array.from(stripAnsi(text)).length
 
 function ansiColor(mode: 38 | 48, hex: string, text: string): string {
   return colorize(text, hex, mode === 38 ? 'foreground' : 'background')
 }
 
-const foreground = (hex: string, text: string): string => ansiColor(38, hex, text)
 const background = (hex: string, text: string): string => ansiColor(48, hex, text)
 
 /** Compact token count like pi's: `988`, `3.4k`, `12k`, `1.0M`.
@@ -199,28 +194,6 @@ export function contextBarReadout(
 
 // --- Context bar (pi-nano-context) ---
 
-/**
- * Blank-pad to `width` cells and right-align the first readout option that
- * fits. Shared by the ANSI string path (renderContextBar) and the hoverable
- * JSX bar (ContextBarView) so both render identical readouts.
- */
-export function rightAlignBarText(
-  options: readonly string[],
-  width: number,
-): string {
-  if (width <= 0) return ''
-  const content = Array.from({ length: width }, () => ' ')
-  for (const option of options) {
-    const start = width - plainWidth(option)
-    if (start < 0) continue
-    for (const [offset, char] of Array.from(option).entries()) {
-      content[start + offset] = char
-    }
-    break
-  }
-  return content.join('')
-}
-
 /** A used segment's fill: background color only, no text. Letters inside the
  *  bar read as noise (community feedback) and never fit the narrow segments
  *  anyway — the pointer names a color now (contextBarBreakdown). This string
@@ -231,14 +204,9 @@ function renderUsedSegment(color: string, width: number): string {
   return background(color, ' '.repeat(width))
 }
 
-function renderFreeSegment(
-  options: readonly string[],
-  width: number,
-  fill: string,
-  style: (text: string) => string,
-): string {
+function renderFreeSegment(width: number, fill: string): string {
   if (width <= 0) return ''
-  return background(fill, style(rightAlignBarText(options, width)))
+  return background(fill, ' '.repeat(width))
 }
 
 /**
@@ -501,86 +469,43 @@ export function contextBarColumns(
 }
 
 /**
- * The segmented context bar: used segments by content type, then the
- * remainder as a light free segment whose right edge carries the usage
- * readout (`13k/64k 19.5%`). No other text — the bar is read by color, and
- * the pointer supplies the names and numbers (contextBarBreakdown). The
- * readout tints amber / red as the context fills (contextPressureStep).
+ * The context bar as one string, in either look: the segmented bar (used
+ * segments by content type, then the remainder as a light free segment whose
+ * right edge carries the usage readout `13k/64k 19.5%`; no other text — the
+ * bar is read by color, and the pointer supplies the names and numbers via
+ * contextBarBreakdown; the readout tints amber / red as the context fills),
+ * or the `blocks` twin: one-colour `█` fill and `░` free cells with the same
+ * right-aligned readout.
  * @param segments - Local token estimates per content type.
- * @param usedTokens - Measured occupancy, driving both fill length and readout.
+ * @param usedTokens - Measured occupancy, driving the fill length.
  * @param contextWindow - The context window size in tokens.
  * @param width - Total bar width in terminal columns.
- * @param colors - The free segment's fill/text override; absent fields keep
- *   the fixed defaults. The used fills stay on the fixed ramp unless a brand
- *   overrides them (see usedSegmentColor).
- * @returns The ANSI-styled segmented bar, or '' when `width` or `contextWindow` is non-positive.
+ * @param colors - The free segment's fill override; absent keeps the fixed
+ *   default. The used fills stay on the fixed ramp unless a brand overrides
+ *   them (see usedSegmentColor).
+ * @param barStyle - `segments` (default) or the single-colour `blocks` gauge.
+ * @returns The ANSI-styled bar, or '' when `width` or `contextWindow` is non-positive.
  */
 export function renderContextBar(
   segments: ContextSegments,
   usedTokens: number,
   contextWindow: number,
   width: number,
-  colors?: { freeFill: string; freeText: string },
+  colors?: { freeFill: string },
+  barStyle: ContextBarStyle = 'segments',
 ): string {
   if (width <= 0 || contextWindow <= 0) return ''
+  if (barStyle === 'blocks') {
+    const ratio = Math.min(1, Math.max(0, usedTokens / contextWindow))
+    const usedWidth = Math.min(width, Math.max(0, Math.round(width * ratio)))
+    return `${'█'.repeat(usedWidth)}${'░'.repeat(width - usedWidth)}`
+  }
   const columns = contextBarColumns(segments, usedTokens, contextWindow, width)
   const used = USED_SEGMENTS.map((segment, index) =>
     renderUsedSegment(usedSegmentColor({ key: segment.key, color: segment.fallback }), columns.used[index] ?? 0),
   ).join('')
   const unclassified = renderUsedSegment(contextBarUsedColor(), columns.unclassified)
-  const freeWidth = columns.free
-  const pct = (usedTokens / contextWindow) * 100
-  const step = contextPressureStep(pct)
-  // Same two-path convention as the free-segment colors: callers pass the
-  // override they resolved, the defaults below stay the raw ANSI twin.
-  const style = step === undefined
-    ? (text: string) => foreground(colors?.freeText ?? FREE_SEGMENT_TEXT, text)
-    : (text: string) => pressureColor(pct, text)
-  return `${used}${unclassified}${renderFreeSegment(
-    contextBarReadout(usedTokens, contextWindow),
-    freeWidth,
-    colors?.freeFill ?? FREE_SEGMENT_FILL,
-    style,
-  )}`
-}
-
-// --- Mini context bar (footer ctx-field hover) ---
-
-/** Pressure-colored text: green below 80%, amber ≥ 80, red ≥ 95.
- * @param pct - Context occupancy percent (0–100+).
- * @param text - Text to color.
- * @returns The capability-aware color-wrapped text.
- */
-export function pressureColor(pct: number, text: string): string {
-  const key = contextPressureStep(pct) ?? 'success'
-  return colorize(text, colorHex(key), 'foreground')
-}
-
-/** Compact 1/8-cell context gauge for the footer's ctx field on hover:
- *  `▕██████▋···▏`, fill proportional to context occupancy, colored by the
- *  amber/red pressure thresholds. Same block ramp as the TPS gauge.
- * @param usedTokens - Total context tokens in use.
- * @param contextWindow - Context window size in tokens.
- * @param width - Gauge width in terminal columns (fill cells, brackets excluded).
- * @returns The ANSI gauge string, or '' for a non-positive window.
- */
-export function renderMiniContextBar(
-  usedTokens: number,
-  contextWindow: number,
-  width = 10,
-): string {
-  if (contextWindow <= 0 || width <= 0) return ''
-  const pct = Math.min(100, Math.max(0, (usedTokens / contextWindow) * 100))
-  const frac = pct / 100
-  const eighths = Math.round(frac * width * 8)
-  const full = Math.floor(eighths / 8)
-  const rem = eighths % 8
-  let fill = '█'.repeat(Math.min(full, width))
-  if (full < width && rem > 0) {
-    fill += HBLOCKS[rem]
-  }
-  const track = TRACK.repeat(Math.max(0, width - fill.length))
-  return `▕${pressureColor(pct, fill)}${`\x1b[2m${track}\x1b[22m`}▏`
+  return `${used}${unclassified}${renderFreeSegment(columns.free, colors?.freeFill ?? FREE_SEGMENT_FILL)}`
 }
 
 // --- TPS gauge + sparkline (pi-tps-meter) ---

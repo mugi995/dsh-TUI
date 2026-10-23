@@ -275,6 +275,7 @@
         "cacheKnown": false,
         "retries": 0,
         "durationMs": 900,
+        "decodeTps": 6.25,
         "outcome": "completed"
       }
     },
@@ -468,6 +469,10 @@
     },
     {
       "path": "rows[2].seq",
+      "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
+    },
+    {
+      "path": "rows[3].turnUsage.decodeTps",
       "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
     },
     {

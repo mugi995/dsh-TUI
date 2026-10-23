@@ -20,6 +20,17 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
+// Isolate persisted UI prefs (status-bar fields, minimal UI, model recents):
+// this Chat interaction test pins the default layout, not the developer's
+// ~/.dsh-tui/settings.json.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'verify-balance-'))
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+}
 
 const [
   { PassThrough, Writable },
@@ -555,9 +566,19 @@ check('累计两次 balanceInfo', channel.balanceCalls === 2, String(channel.bal
   const refreshPos = findText(term, 'DeepSeek 余额 ¥110.00')
   if (refreshPos !== null) {
     const cell = cellOf(term, refreshPos)
+    // The renderer treats two clicks within ~500ms as a text-selection
+    // double-click (not a second click); keep this click clear of the ×
+    // close click that preceded the report re-open.
+    await new Promise(resolve => setTimeout(resolve, 600))
     hover(cell.col + 1, cell.row + 1)
     await settle(() => screenHas(term, '点击刷新'))
-    clickCell(cell.col + 1, cell.row + 1)
+    // The hover detail grows the bottom-anchored block, moving the summary
+    // row up; re-locate it before clicking (the pre-hover coordinate is stale).
+    const moved = findText(term, 'DeepSeek 余额 ¥110.00')
+    const click = moved === null ? cell : cellOf(term, moved)
+    stdin.write(`\x1b[<0;${click.col + 1};${click.row + 1}M`)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    stdin.write(`\x1b[<0;${click.col + 1};${click.row + 1}m`)
   }
 }
 await settle(() => channel.balanceCalls >= 3)

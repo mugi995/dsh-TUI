@@ -800,6 +800,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 **Status**
 
 - `/context`, `/status`, `/cost`, `/balance` — official DeepSeek balance: summary row + hover details, click to refresh.
+- `/quota` — subscription quotas for Ollama Cloud, OpenCode Go and Command Code (only the fields their APIs return: balances, percentages, reset times).
 - `/config`, `/doctor`, `/init`, `/agents`, `/jobs` — background jobs panel: status/elapsed/exit code, `k` kills; with the split layout on and the terminal wide enough it opens as a right-column panel instead (narrow terminals and inline mode keep the full-screen panel).
 - `/settings`.
 

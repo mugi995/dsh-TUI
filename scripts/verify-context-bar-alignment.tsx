@@ -52,6 +52,10 @@ function makeChannel(): Record<string, unknown> {
     displayCwd: 'C:/code/orca',
     gitBranch: 'main',
     working: false,
+    // Non-compact + right-aligned fields give the status row a real right
+    // edge to compare the bar against (the old ctx field used to provide it;
+    // ctx/cache now sit on their own line under the bar).
+    statusBar: { compact: false, gitBranch: true, sessionId: true },
     spinnerMode: 'idle',
     mode: { id: 'default', plan: false },
     modeIndex: 0,
@@ -141,6 +145,13 @@ function findBarRow(term: Terminal): number {
   return best
 }
 
+function leftmostBg(term: Terminal, y: number): number {
+  for (let x = 0; x < term.cols; x++) {
+    if (bgSet(term, y, x)) return x
+  }
+  return -1
+}
+
 function rightmostBg(term: Terminal, y: number): number {
   for (let x = term.cols - 1; x >= 0; x--) {
     if (bgSet(term, y, x)) return x
@@ -168,11 +179,19 @@ for (const cols of WIDTHS) {
       continue
     }
     const barRight = rightmostBg(harness.term, barY)
-    const statusRight = rightmostInk(harness.term, barY + 1)
+    const barLeft = leftmostBg(harness.term, barY)
+    const statusRight = rightmostInk(harness.term, barY + 2)
     check(
       `columns=${cols} bar 右缘对齐内容区右缘`,
       barRight === contentRight,
       `barRight=${barRight} expected=${contentRight}`,
+    )
+    // Width offset is symmetric: the left inset equals the right inset
+    // (the bar spans the content area, 1 cell inside each terminal edge).
+    check(
+      `columns=${cols} bar 左右留白对称（以左为基准）`,
+      barLeft === cols - 1 - barRight,
+      `left=${barLeft} right=${cols - 1 - barRight}`,
     )
     check(
       `columns=${cols} bar 右缘对齐状态行右缘`,
@@ -237,10 +256,6 @@ for (const fullscreen of [false, true]) {
         check(label + ' 填充比例跟随后端占用，误差不超过半格',
           geometry.painted === width && Math.abs(geometry.used - exactUsed) <= 0.5,
           `used=${geometry.used}/${geometry.painted} expected=${exactUsed}/${width}`)
-        if (sample.used === 25_000) {
-          check(label + ' 读数仍为 25.0%',
-            harness.term.buffer.active.getLine(y)?.translateToString(true).includes('25.0%') === true)
-        }
         const ansiTerm = new XTerm({ cols: width, rows: 2, allowProposedApi: true })
         try {
           await new Promise<void>(resolve => ansiTerm.write(
@@ -475,6 +490,114 @@ const PROBE_FILLS = [0x101010, 0x202020, 0x303030, 0x404040, 0x505050]
     && (meteredRuns[0] ?? 0) < (plainRuns[0] ?? 0),
     `plain=${JSON.stringify(plainRuns)} metered=${JSON.stringify(meteredRuns)}`,
   )
+}
+
+// ── blocks 模式：单色 █/░ 字符计量条（statusBar.contextBarStyle）────────
+// 这条路径不画任何背景色：几何必须和分段条落在同一内容区右缘，且 JSX 与
+// ANSI 孪生逐字符相同。默认仍是 segments，所以上面的分段断言不受影响。
+const BLOCK_FILLED = 0x2588 // █
+const BLOCK_FREE = 0x2591 // ░
+
+/** blocks 行：带 `█`/`░` 字符的行（这条路径没有背景填充可找）。 */
+function findBlockRow(term: Terminal): number {
+  for (let y = 0; y < term.rows; y++) {
+    for (let x = 0; x < term.cols; x++) {
+      const code = cellAt(term, y, x)?.getCode() ?? 0
+      if (code === BLOCK_FILLED || code === BLOCK_FREE) return y
+    }
+  }
+  return -1
+}
+
+function glyphCount(term: Terminal, y: number, code: number): number {
+  let count = 0
+  for (let x = 0; x < term.cols; x++) {
+    if (cellAt(term, y, x)?.getCode() === code) count++
+  }
+  return count
+}
+
+function hasAnyBackground(term: Terminal, y: number): boolean {
+  for (let x = 0; x < term.cols; x++) {
+    if (bgSet(term, y, x)) return true
+  }
+  return false
+}
+
+const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
+
+for (const cols of [40, 120]) {
+  const width = cols - 2
+  const channel = {
+    ...makeChannel(),
+    statusBar: { contextBar: true, contextBarStyle: 'blocks' },
+    contextOccupancy: { source: 'backend', usedTokens: 25_000, contextWindow: 100_000 },
+  }
+  const { harness, instance } = await mountAt(cols, 30, channel)
+  const label = `blocks@${cols}`
+  try {
+    const ready = await settled(() => findBlockRow(harness.term) >= 0)
+    check(label + ' 字符计量条已渲染', ready)
+    if (!ready) continue
+    const y = findBlockRow(harness.term)
+    const line = harness.term.buffer.active.getLine(y)?.translateToString(true) ?? ''
+    const expectedUsed = Math.round(width * 0.25)
+    check(label + ' 已用宽度 = 占用比例（四舍五入）',
+      glyphCount(harness.term, y, BLOCK_FILLED) === expectedUsed,
+      `filled=${glyphCount(harness.term, y, BLOCK_FILLED)} expected=${expectedUsed}`)
+    check(label + ' 空白段是 ░ 字符，不是背景色块', !hasAnyBackground(harness.term, y))
+    check(label + ' 条右端铺到内容区右缘',
+      rightmostInk(harness.term, y) === cols - 2 && !line.includes('%'),
+      `right=${rightmostInk(harness.term, y)} line=${JSON.stringify(line)}`)
+    check(label + ' 条恰好铺满内容区宽度', line.length === width + 1, `len=${line.length} expected=${width + 1}`)
+    const ansi = stripAnsi(metrics.renderContextBar(
+      { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+      25_000,
+      100_000,
+      width,
+      undefined,
+      'blocks',
+    ))
+    check(label + ' ANSI 孪生与 JSX 逐字符一致', ansi === line.slice(1), `ansi=${JSON.stringify(ansi)}`)
+  } finally {
+    instance.unmount()
+    instances.delete(process.stdout)
+    harness.term.dispose()
+  }
+}
+
+for (const sample of [
+  { name: 'zero', used: 0, full: false },
+  { name: 'full', used: 100_000, full: true },
+  { name: 'overflow', used: 125_000, full: true },
+]) {
+  const cols = 80
+  const width = cols - 2
+  const { harness, instance } = await mountAt(cols, 30, {
+    ...makeChannel(),
+    statusBar: { contextBar: true, contextBarStyle: 'blocks' },
+    contextOccupancy: { source: 'backend', usedTokens: sample.used, contextWindow: 100_000 },
+  })
+  const label = `blocks@80 ${sample.name}`
+  try {
+    const ready = await settled(() => findBlockRow(harness.term) >= 0)
+    check(label + ' 已渲染', ready)
+    if (!ready) continue
+    const y = findBlockRow(harness.term)
+    const line = harness.term.buffer.active.getLine(y)?.translateToString(true) ?? ''
+    const expected = sample.full ? width : 0
+    check(label + ' 填充宽度夹在条内',
+      glyphCount(harness.term, y, BLOCK_FILLED) === expected,
+      `filled=${glyphCount(harness.term, y, BLOCK_FILLED)} expected=${expected}`)
+    check(label + ' 条内不再有读数文字',
+      !line.includes('%') && glyphCount(harness.term, y, BLOCK_FREE) === (sample.full ? 0 : width),
+      `line=${JSON.stringify(line)}`)
+    check(label + ' 没有背景色块', !hasAnyBackground(harness.term, y))
+  } finally {
+    instance.unmount()
+    instances.delete(process.stdout)
+    harness.term.dispose()
+  }
 }
 
 console.log(failed === 0 ? '\nAll context bar alignment checks passed.' : `\n${failed} check(s) failed.`)

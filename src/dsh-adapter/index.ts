@@ -384,6 +384,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     cwd: Schema.boolean().default(DEFAULT_STATUS_BAR.cwd),
     contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
     cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
+    quota: Schema.boolean().default(DEFAULT_STATUS_BAR.quota),
     tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
     // Session cost estimate (≈¥) beside the token totals; StatusLine gates the
     // chip on it. The slot must be declared here: schemastery drops an
@@ -397,6 +398,8 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     goal: Schema.boolean().default(DEFAULT_STATUS_BAR.goal),
     mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
     contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
+    // Bar look: five themed content-type segments, or one-colour █/░ blocks.
+    contextBarStyle: Schema.union(['segments', 'blocks']).default(DEFAULT_STATUS_BAR.contextBarStyle),
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),

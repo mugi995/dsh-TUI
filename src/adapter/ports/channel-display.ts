@@ -77,6 +77,10 @@ export type SplashFontSetting = 'daily' | SplashFontId
  */
 export type BrandSetting = 'auto' | 'deepseek' | 'claude' | 'codex'
 
+/** How the footer context bar is drawn: the five theme-coloured content-type
+ *  segments (default), or a single-colour `█`/`░` character gauge. */
+export type ContextBarStyle = 'segments' | 'blocks'
+
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {
   /** Prefer the compact, single-line presentation when space permits. */
@@ -91,6 +95,9 @@ export interface StatusBarConfig {
   contextUsage: boolean
   /** Prompt-cache hit rate. */
   cache: boolean
+  /** Subscription quota rows (Ollama Cloud / OpenCode Go / Command Code)
+   *  in the right column of the ctx/cache line. */
+  quota: boolean
   /** Running input/output token totals. */
   tokens: boolean
   /** Estimated session spend (≈¥, DeepSeek official pricing — only shown
@@ -108,8 +115,11 @@ export interface StatusBarConfig {
   goal: boolean
   /** Non-default session mode. */
   mode: boolean
-  /** Segmented context progress bar on its own footer row. */
+  /** Context progress bar on its own footer row. */
   contextBar: boolean
+  /** Bar rendering: segmented content-type fills (default) or one-colour
+   *  block characters. The toggle above decides whether the row exists. */
+  contextBarStyle: ContextBarStyle
   /** Idle working-activity summary. */
   activity: boolean
   /** Mini trajectory wake rendered at the footer's right edge. */

@@ -22,15 +22,26 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
+// Isolate the persisted recently-used list: the model click must land on the
+// EMPTY recents tab, not whatever the developer's ~/.dsh-tui holds.
+{
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = mkdtempSync(join(tmpdir(), 'verify-session-color-recap-'))
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+}
 
 const [
   { PassThrough, Writable },
   React,
   { Terminal: XTerm },
-  { render },
+  { render, AlternateScreen },
   { Chat },
   { setLang },
   { settle, settled, sleep, viewportLines },
+  { stringWidth },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -39,6 +50,7 @@ const [
   import('../src/screens/Chat.js'),
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
+  import('../src/ink/stringWidth.js'),
 ])
 
 const COLS = 100
@@ -83,7 +95,9 @@ function check(name: string, condition: boolean, detail = ''): void {
 /** The prompt top-border row: the line containing the `╭` corner. */
 function borderRow(): { y: number; text: string } | undefined {
   const lines = viewportLines(term, ROWS)
-  const y = lines.findIndex(line => line.includes('╭'))
+  // The prompt border is the LAST `╭` row: picker overlays open above the
+  // input and carry their own `╭` corners.
+  const y = lines.findLastIndex(line => line.includes('╭'))
   return y === -1 ? undefined : { y, text: lines[y]! }
 }
 
@@ -109,6 +123,8 @@ function makeChannel() {
   const listeners = new Set<() => void>()
   const setColorCalls: string[] = []
   const renameCalls: string[] = []
+  /** Command-path counters for the top-border label's click targets. */
+  const calls = { models: 0, providers: 0, efforts: 0 }
   const localReports: Array<{ title: string; lines: string[] }> = []
   const notifications: string[] = []
   const rows = [
@@ -189,7 +205,24 @@ function makeChannel() {
     interruptAndDeliver: () => 0,
     clear() {},
     loadOlder: () => 0,
-    listModels: async () => [],
+    listModels: async () => {
+      calls.models += 1
+      return [
+        { provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { provider: 'other', id: 'other-1', name: 'Other One' },
+      ]
+    },
+    listProviders: async () => { calls.providers += 1; return [] },
+    listEfforts: async () => {
+      calls.efforts += 1
+      // Two tiers so the /effort slider actually opens (the command treats a
+      // 0/1-tier list as "nothing to pick" and returns without an overlay).
+      return {
+        efforts: [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }],
+        defaultEffort: 'max',
+        levelsFallback: false,
+      }
+    },
     listFiles: async () => [],
     listSessions: async () => [],
     setResumeTarget() {},
@@ -214,6 +247,7 @@ function makeChannel() {
     subscribeSettingsSections: () => () => {},
     setColorCalls,
     renameCalls,
+    calls,
     localReports,
     notifications,
   }
@@ -226,12 +260,13 @@ const channel = makeChannel()
 const questionStore = { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} }
 const approvalStore = { subscribe: () => () => {}, getSnapshot: () => null }
 const instance = await render(
-  <Chat
-    fullscreen
-    channel={channel}
-    questionStore={questionStore as any}
-    approvalStore={approvalStore as any}
-  />,
+  <AlternateScreen>
+    <Chat
+      channel={channel}
+      questionStore={questionStore as any}
+      approvalStore={approvalStore as any}
+    />
+  </AlternateScreen>,
   {
     stdout: new FakeStdout(),
     stderr: new FakeStderr(),
@@ -242,7 +277,18 @@ const instance = await render(
 )
 // ── 1. session 名标签显示在输入框顶边框右上角（开关开启时）────────────
 check('输入框顶边框存在', await settled(() => borderRow() !== undefined))
-check('顶边框右侧渲染会话名标签（与右圆角留白）', await settled(() => borderRow()?.text.includes(' 我的会话 ──╮') === true), borderRow()?.text ?? '')
+check('顶边框右侧渲染会话名标签（与右圆角留白）', await settled(() => {
+  const text = borderRow()?.text ?? ''
+  return text.includes(' 我的会话 ──[') && text.endsWith('─╮')
+}), borderRow()?.text ?? '')
+check('顶边框左端嵌入模型/effort读数', await settled(() => {
+  const text = borderRow()?.text ?? ''
+  return text.startsWith('╭─[deepseek · deepseek-v4-flash / max]──')
+}), borderRow()?.text ?? '')
+check('顶边框右端嵌入 cwd（方括号）', await settled(() => {
+  const text = borderRow()?.text ?? ''
+  return text.includes('[/tmp]─╮')
+}), borderRow()?.text ?? '')
 check('未设置颜色时边框为主题 promptBorder 灰蓝', await settled(() => borderFgColor() === 0x55606f), `0x${borderFgColor()?.toString(16) ?? '?'}`)
 
 // ── 1b. 开关关闭时标签隐藏（默认关，settings `promptSessionLabel`）────
@@ -254,7 +300,63 @@ check('关闭开关后会话名标签隐藏', await settled(() => {
 }))
 channel.promptSessionLabel = true
 channel.emit()
-check('重新开启后标签恢复（右上角）', await settled(() => borderRow()?.text.includes(' 我的会话 ──╮') === true))
+check('重新开启后标签恢复（右上角）', await settled(() => {
+  const text = borderRow()?.text ?? ''
+  return text.includes(' 我的会话 ──[') && text.endsWith('─╮')
+}))
+
+// ── 1c. 上边框读数的点击：模型段 → /model、思考档段 → /effort ───────────
+// 这两段原来在底栏，点击行为随读数一起搬到了输入框上边框左端。
+{
+  await sleep(300)
+  // 边框坐标：用 `╭` 行本身，而不是全屏首个匹配（启动页也有 `model · effort`
+  // 文案，全屏搜索会点到那里）；列号按显示单元算。
+  const clickBorder = async (needle: string): Promise<boolean> => {
+    const row = borderRow()
+    if (row === undefined) return false
+    const at = row.text.indexOf(needle)
+    if (at < 0) return false
+    const col = stringWidth(row.text.slice(0, at))
+    stdin.write(`\x1b[<0;${col + 1};${row.y + 1}M`)
+    await sleep(40)
+    stdin.write(`\x1b[<0;${col + 1};${row.y + 1}m`)
+    await sleep(40)
+    return true
+  }
+  // 模型段 → 现有的 recently-used 落地页（没有最近使用 → 空提示）。
+  check('点击模型段打开 recently used',
+    (await clickBorder('deepseek-v4-flash'))
+    && await settled(() => screenText().includes('deepseek / DeepSeek V4 Flash')),
+    JSON.stringify(viewportLines(term).filter(line => line.trim() !== '').slice(-8)))
+  // 同一个读数再点一次 = 关掉（与 Esc 等价，不需要回到键盘）。两次点击
+  // 拉开 500ms，避开渲染器的双击判定（双击是选词手势，不是第二次 click）。
+  await sleep(600)
+  check('再次点击模型段关闭 /model',
+    (await clickBorder('deepseek-v4-flash')) && await settled(() => !/暂无/.test(screenText())))
+  const effortsBefore = channel.calls.efforts
+  check('点击思考档段触发 /effort', (await clickBorder('max')) && await settled(() => channel.calls.efforts > effortsBefore),
+    `efforts=${channel.calls.efforts}`)
+  check('/effort 滑块打开', await settled(() => screenText().includes('推理强度')))
+  const effortsOpened = channel.calls.efforts
+  // 再点同一个读数：关闭，而不是重跑 /effort（listEfforts 不再增加）。同样
+  // 拉开 500ms，避开双击（选词）判定。
+  await sleep(600)
+  check('再次点击思考档段关闭 /effort',
+    (await clickBorder('max'))
+    && await settled(() => !screenText().includes('推理强度'))
+    && channel.calls.efforts === effortsOpened,
+    `efforts=${channel.calls.efforts}`)
+  // 提供方段 → 该提供方的模型列表（不是 recents 落地页）。放在最后，
+  // 避免它的选择器状态影响上面的开闭断言。
+  await sleep(600)
+  check('点击提供方段打开该提供方的模型列表',
+    (await clickBorder('deepseek'))
+    && await settled(() => screenText().includes('DeepSeek V4 Flash'))
+    && !screenText().includes('deepseek / DeepSeek V4 Flash'),
+    JSON.stringify(viewportLines(term).filter(line => line.trim() !== '').slice(-8)))
+  stdin.write('\x1b')
+  await settled(() => !screenText().includes('DeepSeek V4 Flash'))
+}
 
 // ── 2. /color <name> 设置会话强调色并重绘边框 ──────────────────────────
 stdin.write('/color red')

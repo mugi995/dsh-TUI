@@ -691,22 +691,32 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const usage = event.usage
     if (usage !== undefined) bookUsage(usage, event)
     const tpsMessageStep = tpsStep
-    // Only reliable spans enter the rate ledger, including late-usage
-    // reconciliation. Billing above still includes every delivered token.
+    // DSH 0.1.5+ settles each message with an embedded `stream` whose first
+    // and last chunk times are the exact decode span. Prefer it: live frames
+    // can be absent (non-streamed host, buffered delivery) or arrive in a
+    // burst, in which case the first-delta fallback measures ~0 and no rate
+    // is ever sampled. Only reliable spans enter the rate ledger, including
+    // late-usage reconciliation.
+    const streamDecodeMs = event.decodeMs
+    const liveDecodeMs = tpsMessageStep?.firstTokenTime === undefined
+      ? undefined
+      : Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+    const decodeMs = streamDecodeMs !== undefined && streamDecodeMs > 0
+      ? streamDecodeMs
+      : liveDecodeMs
     if (
       tpsTurn === event.turn &&
       tpsMessageStep !== undefined &&
       tpsMessageStep.turn === event.turn &&
       tpsMessageStep.step === event.step &&
-      tpsMessageStep.firstTokenTime !== undefined &&
-      event.time - tpsMessageStep.firstTokenTime > MIN_TPS_DECODE_MS
+      decodeMs !== undefined &&
+      decodeMs > MIN_TPS_DECODE_MS
     ) {
       const reported = usageOutputTokens(usage)
       const outputTokens = reported
         ?? (tpsMessageStep.outputEstimate > 0
           ? Math.ceil(tpsMessageStep.outputEstimate)
           : undefined)
-      const decodeMs = Math.max(0, event.time - tpsMessageStep.firstTokenTime)
       tpsTurnDecodeMs += decodeMs
       if (outputTokens !== undefined) {
         tpsTurnDecodeTokens += outputTokens
@@ -1000,10 +1010,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     settleStreaming()
     state.working = false
     state.activeToolCount = 0
+    let turnDecodeTps: number | undefined
     if (tpsTurn !== undefined && tpsTurn === event.turn) {
       let sample: { tps: number; at: number } | undefined
       if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
         const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+        turnDecodeTps = turnTps
         state.tps = turnTps
         sample = { tps: turnTps, at: event.time }
         state.tpsSamples.push(sample)
@@ -1061,6 +1073,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         cacheKnown: turnLedger.cacheKnown,
         retries: turnFailedAttempts.size,
         durationMs: Math.max(0, event.time - turnLedger.startedAt),
+        ...(turnDecodeTps === undefined ? {} : { decodeTps: turnDecodeTps }),
         ...(turnLedger.model === undefined ? {} : { model: turnLedger.model }),
         ...(turnLedger.model === undefined || turnLedger.model === lastNotedTurnModel ? {} : { noteModel: true }),
         ...(state.reasoningEffort === undefined ? {} : { effort: state.reasoningEffort }),

@@ -48,7 +48,6 @@ if (selected === undefined) {
   const font = splashFontById('bold')
   const samples = [
     ...rows, ...renderBigText(font, 'DEEPSEEK', 0, rgb, rgb, rgb),
-    metrics.pressureColor(50, '正常'), metrics.pressureColor(90, 'warning'), metrics.pressureColor(99, 'high'),
     metrics.speedColor(10, 'slow'), metrics.speedColor(30, 'medium'), metrics.speedColor(100, 'fast'),
     metrics.renderContextBar({ system: 10, prompt: 20, assistant: 30, thinking: 10, tools: 10 }, 80, 200, 30),
   ]

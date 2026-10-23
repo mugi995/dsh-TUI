@@ -446,12 +446,55 @@ export interface PromptController {
   vimActive(): boolean}
 
 /**
+ * The route readout the prompt embeds in its top border's left side
+ * (`╭─[provider · model / effort]────`). The model side opens the same
+ * /model picker the footer segment used to, and the effort side /effort;
+ * `showModel` / `showEffort` are the `statusBar.model` / `statusBar.thinking`
+ * switches, now controlling this label instead of the footer segments.
+ */
+export interface PromptModelLabel {
+  /** Provider display name from the model catalog; absent skips the provider. */
+  provider?: string
+  /** Model id (or the friendly display name), already suitable for display. */
+  model: string
+  /** Active reasoning effort id; ignored unless `showEffort`. */
+  effort?: string
+  /** Include the provider/model part (`statusBar.model`). */
+  showModel: boolean
+  /** Include the effort part (`statusBar.thinking`). */
+  showEffort: boolean
+  /** Provider part click: the /model picker on this provider's list. */
+  onOpenProvider?: () => void
+  /** Model part click: the /model picker on the recently-used landing. */
+  onOpenModel?: () => void
+  /** Effort part click: the /effort picker. */
+  onOpenEffort?: () => void
+}
+
+/**
  * Owner-held slot for the composer draft, so a screen that unmounts the
  * prompt (every early return in Chat) does not discard what the user typed.
  *
  * The composer writes ONE complete snapshot as it unmounts and consumes it on
  * the way back; the shape and the reasoning live in `promptDraftCache.ts`.
  */
+/** Keep the END of a path (the project directory) within `maxWidth` cells. */
+function truncatePathTail(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return ''
+  if (stringWidth(text) <= maxWidth) return text
+  const chars = Array.from(text)
+  let width = 0
+  let tail = ''
+  for (let index = chars.length - 1; index >= 0; index -= 1) {
+    const char = chars[index] as string
+    const charWidth = stringWidth(char)
+    if (width + charWidth > maxWidth - 1) break
+    width += charWidth
+    tail = char + tail
+  }
+  return `…${tail}`
+}
+
 export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
@@ -541,6 +584,19 @@ export interface PromptInputProps {
    * "← N agents" hint when provided (hidden when undefined).
    */
   backgroundAgentsNeedingInput?: number
+  /**
+   * The live route readout embedded in the prompt's top border, left side
+   * (`╭─[provider · model / effort]────`). Chat supplies it from the
+   * channel and the model catalog; absent keeps the border byte-identical
+   * for hosts/fixtures that mount the prompt without a route.
+   */
+  modelLabel?: PromptModelLabel
+  /**
+   * The session working directory shown at the prompt's top-right in brackets
+   * (`[~/project]`). Chat supplies the display-formatted path and gates it on
+   * `statusBar.cwd`; absent keeps the border byte-identical.
+   */
+  cwdLabel?: string
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
   /**
@@ -615,6 +671,8 @@ export function PromptInput({
   onOpenSessions,
   backendLabel,
   backgroundAgentsNeedingInput,
+  modelLabel,
+  cwdLabel,
   controllerRef,
   onCaretImage,
   caretPreviewOpen = false,
@@ -781,6 +839,8 @@ export function PromptInput({
   const [expandHovered, setExpandHovered] = React.useState(false)
   /** Hover state of the ⌂ session-list affordance at the head of the row. */
   const [homeHovered, setHomeHovered] = React.useState(false)
+  /** Hover state of the top-border route readout (model / effort parts). */
+  const [borderHover, setBorderHover] = React.useState<'model' | 'effort' | null>(null)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
   /** Highlighted row of the docked-queue selector (null = inactive; the
@@ -4182,10 +4242,138 @@ export function PromptInput({
   // here would be swallowed by ink and silently freeze the screen.
   const attachedContexts = channel.attachedContexts ?? []
   const sessionTitle = channel.sessionTitle ?? ''
+  // Top-border route readout (`╭─[provider · model / effort]────`). The
+  // model side opens the /model picker and the effort side /effort — the same
+  // targets the footer segments carried before they moved here. Width is
+  // budgeted first: the label drops its provider, then the effort, then
+  // truncates the model, and keeps at least ~10 cells of border to its left.
+  const modelSlot = (() => {
+    if (modelLabel === undefined) return undefined
+    const modelText = modelLabel.showModel ? modelLabel.model.trim() : ''
+    const effortText = modelLabel.showEffort ? modelLabel.effort?.trim() ?? '' : ''
+    if (modelText === '' && effortText === '') return undefined
+    const maxText = columns - 14
+    if (maxText < 4) return undefined
+    const providerText = modelText === '' ? '' : modelLabel.provider?.trim() ?? ''
+    const textOf = (provider: string, model: string, effort: string): string => {
+      const head = [provider, model].filter(part => part !== '').join(' · ')
+      if (head === '') return effort
+      return effort === '' ? head : `${head} / ${effort}`
+    }
+    let chosen = { provider: providerText, model: modelText, effort: effortText }
+    if (stringWidth(textOf(chosen.provider, chosen.model, chosen.effort)) > maxText) {
+      chosen = { provider: '', model: modelText, effort: effortText }
+    }
+    if (stringWidth(textOf(chosen.provider, chosen.model, chosen.effort)) > maxText) {
+      chosen = { provider: '', model: modelText, effort: '' }
+    }
+    if (stringWidth(textOf(chosen.provider, chosen.model, chosen.effort)) > maxText) {
+      const room = maxText - 1
+      chosen = modelText !== '' && room > 0
+        ? { provider: '', model: `${truncateToWidth(modelText, room)}…`, effort: '' }
+        : { provider: '', model: '', effort: effortText }
+    }
+    const text = textOf(chosen.provider, chosen.model, chosen.effort)
+    if (text === '' || stringWidth(text) > maxText) return undefined
+    const onOpenProvider = modelLabel.onOpenProvider
+    const onOpenModel = modelLabel.onOpenModel
+    const onOpenEffort = modelLabel.onOpenEffort
+    const headText = [chosen.provider, chosen.model].filter(part => part !== '').join(' · ')
+    const headExists = headText !== ''
+    const providerWidth = stringWidth(chosen.provider)
+    // One hit target for `provider · model`, split by the click column: the
+    // two-segment Box pair gave the provider a hit rect that covered the
+    // model text (Ink/Yoga shrink-wrap), so the column is the reliable split.
+    const headClickable = onOpenProvider !== undefined || onOpenModel !== undefined
+    const headNode = headText === ''
+      ? null
+      : headClickable
+        ? (
+          <Box
+            flexShrink={0}
+            onClick={(event: ClickEvent) => {
+              event.stopImmediatePropagation()
+              if (chosen.provider !== '' && event.localCol < providerWidth) {
+                onOpenProvider?.()
+                return
+              }
+              if (chosen.provider !== '' && event.localCol < providerWidth + 3) return
+              onOpenModel?.()
+            }}
+            onMouseEnter={() => setBorderHover('model')}
+            onMouseLeave={() => setBorderHover(current => (current === 'model' ? null : current))}
+          >
+            <Text
+              color={promptAccent}
+              bold={borderHover === 'model'}
+              underline={borderHover === 'model'}
+            >
+              {headText}
+            </Text>
+          </Box>
+        )
+        : <Text color={promptAccent}>{headText}</Text>
+    const node = (
+      <Box flexDirection="row" height={1} flexShrink={0}>
+        <Text color={promptAccent}>[</Text>
+        {headNode}
+        {headExists && chosen.effort !== '' ? <Text color={promptAccent}>{' / '}</Text> : null}
+        {chosen.effort !== '' ? (
+          <Box
+            {...(onOpenEffort === undefined ? {} : {
+              width: stringWidth(chosen.effort),
+              onClick: (event: ClickEvent) => {
+                event.stopImmediatePropagation()
+                onOpenEffort()
+              },
+              onMouseEnter: () => setBorderHover('effort'),
+              onMouseLeave: () => setBorderHover(current => (current === 'effort' ? null : current)),
+            })}
+          >
+            <Text
+              color={promptAccent}
+              bold={borderHover === 'effort'}
+              underline={borderHover === 'effort'}
+            >
+              {chosen.effort}
+            </Text>
+          </Box>
+        ) : null}
+        <Text color={promptAccent}>]</Text>
+      </Box>
+    )
+    return { width: stringWidth(text) + 2, node }
+  })()
+  // Top-right working directory, bracketed like the route readout:
+  // `[~/project]`. Tail-truncated (the project directory is the useful end)
+  // and budgeted against the model label on the same row.
+  const cwdSlot = (() => {
+    const path = cwdLabel?.trim() ?? ''
+    if (path === '') return undefined
+    const maxText = Math.min(40, columns - (modelSlot?.width ?? 0) - 14)
+    if (maxText < 4) return undefined
+    const text = truncatePathTail(path, maxText)
+    return {
+      width: stringWidth(text) + 2,
+      node: (
+        <Box flexDirection="row" height={1} flexShrink={0}>
+          <Text color={promptAccent}>[</Text>
+          <Text color={promptAccent}>{text}</Text>
+          <Text color={promptAccent}>]</Text>
+        </Box>
+      ),
+    }
+  })()
+  // The session chip shares the top border with both readouts: it keeps its
+  // 28-cell ceiling but yields to them, and hides on very narrow terminals
+  // instead of squeezing the border to nothing.
+  const sessionLabelMax = modelSlot === undefined && cwdSlot === undefined
+    ? Math.max(8, Math.min(28, columns - 8))
+    : Math.min(28, columns - 8 - (modelSlot?.width ?? 0) - (cwdSlot?.width ?? 0) - 4)
   const topRightLabel: InputBorderLabel | undefined =
-    channel.promptSessionLabel === true && sessionTitle !== ''
+    channel.promptSessionLabel === true && sessionTitle !== '' && sessionLabelMax >= 4
       ? {
-          text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
+          text: truncateToWidth(sessionTitle, sessionLabelMax),
           color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'accent'),
           ink: 'inverseText',
         }
@@ -4551,6 +4739,8 @@ export function PromptInput({
         columns={columns}
         idleColor={promptAccent}
         topRightLabel={topRightLabel}
+        topLeftSlot={modelSlot}
+        topRightSlot={cwdSlot}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           {/* ⌂ 会话列表入口：点击打开会话浏览；hover 提亮为输入框强调色。

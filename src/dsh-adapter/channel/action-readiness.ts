@@ -38,6 +38,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'listSkills'
   | 'describeCredential'
   | 'balanceInfo'
+  | 'quotaInfo'
   | 'sideQuestion'
   | 'listFileCandidates'
   | 'listFiles'
@@ -121,6 +122,7 @@ export function createChannelActionMethods(
     listSkills: () => getReadyActions().listSkills(),
     describeCredential: ref => getReadyActions().describeCredential(ref),
     balanceInfo: () => getReadyActions().balanceInfo(),
+    quotaInfo: () => getReadyActions().quotaInfo(),
     sideQuestion: (question, options) => getReadyActions().sideQuestion(question, options),
     listFileCandidates: (query, options) => getReadyActions().listFileCandidates(query, options),
     listFiles: () => getReadyActions().listFiles(),
@@ -240,6 +242,7 @@ export function createUnavailableActionDelegates(
     // No DeepSeek account stands behind this backend: report the key as
     // absent rather than inventing a network/HTTP failure.
     balanceInfo: () => refuseAsync('balance', { ok: false, reason: 'no-key' } as const),
+    quotaInfo: () => refuseAsync('quota', { providers: [], fetchedAt: Date.now() }),
     sideQuestion: () => {
       unavailable('btw')
       return Promise.resolve({ answer: null, error: unavailableLines('btw').join(' ') })

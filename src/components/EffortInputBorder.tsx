@@ -39,27 +39,48 @@ export interface InputBorderLabel {
   ink: keyof Theme | Color
 }
 
+/** A caller-built node embedded in a border row (the model / effort readout).
+ *  `width` is its exact display width, so the border runs can be clipped to
+ *  exactly the cells left over. */
+export interface InputBorderSlot {
+  width: number
+  node: React.ReactNode
+}
+
 /** 边框行（顶/底共用同一色段序列——同步变色）。顶行可在右圆角前插入
- *  一个静态标签 chip（会话名），占用的列数从色段序列里扣掉，行宽不变。 */
+ *  一个静态标签 chip（会话名），两端可各插入一个调用方节点（左：模型/
+ *  effort 读数；右：cwd）。占用的列数从色段序列里扣掉，行宽不变。 */
 function BorderRow({
   left,
   right,
   runs,
   idleColor,
   label,
+  leftSlot,
+  rightSlot,
 }: {
   left: string
   right: string
   runs: ReadonlyArray<{ glyph: string; color: keyof Theme | Color }>
   idleColor: keyof Theme | Color
   label?: InputBorderLabel
+  leftSlot?: InputBorderSlot
+  rightSlot?: InputBorderSlot
 }): React.ReactNode {
   const labelWidth = label === undefined ? 0 : stringWidth(` ${label.text} `)
   // chip 与右圆角之间的留白（边框线格数）：视觉上不让标签贴死 ╮。
   const labelGap = label === undefined ? 0 : 2
-  // 裁剪色段序列到剩余列数（label 行与底行的列数一致，总宽不变）。
-  // 色段保留左侧部分，右侧让位给 chip + 留白（右上角布局）。
-  let budget = Math.max(0, runs.reduce((sum, run) => sum + run.glyph.length, 0) - labelWidth - labelGap)
+  const slotGap = 2
+  // 左槽位自带左 1 格、右 2 格的边框线；右槽位在无 chip 时自带左侧 2 格，
+  // 有 chip 时由 chip 后的留白充当，右侧只留 1 格——最后一行读数因此比
+  // 其它槽位更贴近右圆角（用户指定的「再右一列」）。
+  const leftLead = leftSlot === undefined ? 0 : 1
+  const leftReserve = leftSlot === undefined ? 0 : leftSlot.width + leftLead + slotGap
+  const rightLead = rightSlot !== undefined && label === undefined ? slotGap : 0
+  const rightGap = rightSlot === undefined ? 0 : 1
+  const rightReserve = rightSlot === undefined ? 0 : rightSlot.width + rightLead + rightGap
+  // 裁剪色段序列到剩余列数（每行总宽不变）。
+  let budget = Math.max(0, runs.reduce((sum, run) => sum + run.glyph.length, 0) - labelWidth - labelGap - leftReserve - rightReserve)
   const clipped: Array<{ glyph: string; color: keyof Theme | Color }> = []
   for (const run of runs) {
     if (budget <= 0) break
@@ -68,20 +89,24 @@ function BorderRow({
     budget -= take
   }
   return (
-    <Box width="100%" height={1} flexShrink={0} overflow="hidden">
-      <Text wrap="truncate-end">
-        <Text color={idleColor}>{left}</Text>
-        {clipped.map((run, i) => (
-          <Text key={i} color={run.color}>
-            {run.glyph}
-          </Text>
-        ))}
-        {label !== undefined && (
-          <Text backgroundColor={label.color} color={label.ink}>{` ${label.text} `}</Text>
-        )}
-        {label !== undefined && <Text color={idleColor}>{'─'.repeat(labelGap)}</Text>}
-        <Text color={idleColor}>{right}</Text>
-      </Text>
+    <Box width="100%" height={1} flexShrink={0} overflow="hidden" flexDirection="row">
+      <Text color={idleColor}>{left}</Text>
+      {leftSlot !== undefined && <Text color={idleColor}>{'─'.repeat(leftLead)}</Text>}
+      {leftSlot !== undefined && <Box flexShrink={0}>{leftSlot.node}</Box>}
+      {leftSlot !== undefined && <Text color={idleColor}>{'─'.repeat(slotGap)}</Text>}
+      {clipped.map((run, i) => (
+        <Text key={i} color={run.color}>
+          {run.glyph}
+        </Text>
+      ))}
+      {label !== undefined && (
+        <Text backgroundColor={label.color} color={label.ink}>{` ${label.text} `}</Text>
+      )}
+      {label !== undefined && <Text color={idleColor}>{'─'.repeat(labelGap)}</Text>}
+      {rightSlot !== undefined && rightLead > 0 && <Text color={idleColor}>{'─'.repeat(rightLead)}</Text>}
+      {rightSlot !== undefined && <Box flexShrink={0}>{rightSlot.node}</Box>}
+      {rightSlot !== undefined && <Text color={idleColor}>{'─'.repeat(rightGap)}</Text>}
+      <Text color={idleColor}>{right}</Text>
     </Box>
   )
 }
@@ -92,6 +117,8 @@ export function EffortInputBorder({
   columns,
   idleColor,
   topRightLabel,
+  topLeftSlot,
+  topRightSlot,
   children,
 }: {
   /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
@@ -103,6 +130,10 @@ export function EffortInputBorder({
   idleColor: keyof Theme | Color
   /** 顶边框右侧的静态标签 chip（会话名标签）；undefined = 不显示。 */
   topRightLabel?: InputBorderLabel
+  /** 顶边框左端的调用方节点（模型/effort 读数）；undefined = 不显示。 */
+  topLeftSlot?: InputBorderSlot
+  /** 顶边框右端的调用方节点（cwd）；undefined = 不显示。 */
+  topRightSlot?: InputBorderSlot
   children: React.ReactNode
 }): React.ReactNode {
   const clock = useContext(ClockContext)
@@ -160,7 +191,7 @@ export function EffortInputBorder({
       width="100%"
       flexShrink={0}
     >
-      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} label={topRightLabel} />
+      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} label={topRightLabel} leftSlot={topLeftSlot} rightSlot={topRightSlot} />
       <Box flexShrink={0}>{children}</Box>
       <BorderRow left="╰" right="╯" runs={runs} idleColor={idleColor} />
     </Box>
