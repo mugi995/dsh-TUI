@@ -387,6 +387,25 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
 
+## `/quota`：订阅额度与 quota 端点
+
+- `/quota`：获取并打印订阅额度/使用率，同时刷新 ctx/cache 行右侧的常驻行。
+- `/quota status`：显示各 provider 的启用状态、端点（官方/自定义）与密钥状态。
+- `/quota setup <provider> on|off|official|<baseURL>`：设置某个 provider 的 quota 端点。
+  - provider：`ollama` / `opencode-go` / `command-code` / `openrouter`（别名 `go` / `cc` / `or` 也可）
+  - `official`：清除自定义端点、恢复官方地址
+  - `off` / `on`：停止/恢复该 provider 的获取（不影响显示开关 `statusBar.quota`）
+  - baseURL 只接受 `https`；仅 loopback（`localhost` / `127.0.0.1` / `::1`）可用 `http`。不允许 userinfo、query、fragment
+  - 设为自定义端点后，该 provider 的 API key 会发送到该地址；只应使用可信端点
+- `/quota reset [provider]`：恢复官方端点（全部或指定 provider）。
+- 配置保存在 `~/.dsh-tui/quota.json`（0600），只含启用状态和 baseURL；API key 仍保存在 `~/.dsh/.credentials.yaml`。
+- 端点由 baseURL 加固定路径组成：
+  - `ollama` → `{base}/api/balance`
+  - `opencode-go` → `{base}/zen/go/v1/usage`
+  - `command-code` → `{base}/alpha/...`
+  - `openrouter` → `{base}/key`、`{base}/credits`（官方 base 为 `https://openrouter.ai/api/v1`）
+- 密钥引用：`OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`、`COMMANDCODE_API_KEY` / `COMMAND_CODE_API_KEY` / `CMD_API_KEY`、`OPENROUTER_API_KEY`（可选 `OPENROUTER_MANAGEMENT_KEY`）。
+
 ## `/provider`：运行时管理模型提供方
 
 `/provider` 打开交互向导，无需重启即可添加、编辑、删除模型提供方。

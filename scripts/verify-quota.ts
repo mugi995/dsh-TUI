@@ -17,6 +17,8 @@ import { fetchQuotaSnapshot } from '../src/quota/fetch.js'
 import { resolveQuotaKeys } from '../src/quota/keys.js'
 import { formatQuotaReport } from '../src/quota/report.js'
 import { quotaBar, quotaFooterLines } from '../src/quota/footer.js'
+import { parseQuotaCommand } from '../src/quota/command.js'
+import { QUOTA_OFFICIAL_BASE, normalizeQuotaBaseURL, readQuotaSettings, resolveQuotaProviderId, writeQuotaSettings } from '../src/quota/config.js'
 import { setLang } from '../src/i18n.js'
 
 setLang('en')
@@ -303,6 +305,94 @@ function formatQuotaFooterFixture(): string[] {
   const snapshot = await fetchQuotaSnapshot({ openrouter: 'bad' }, fetchWith(replies), () => NOW)
   check('OpenRouter both endpoints failing becomes an unauthorized entry',
     snapshot.providers[0]?.error?.code === 'unauthorized', JSON.stringify(snapshot.providers[0]))
+}
+
+{
+  // Quota-only settings: base URL overrides and on/off, no secrets.
+  const home = mkdtempSync(join(tmpdir(), 'verify-quota-config-'))
+  try {
+    writeQuotaSettings({
+      providers: {
+        'opencode-go': { enabled: true, baseURL: 'https://relay.example/api' },
+        ollama: { enabled: false },
+      },
+    }, home)
+    const settings = readQuotaSettings(home)
+    check('quota settings persist enabled state and a custom base URL',
+      settings.providers['opencode-go']?.enabled === true
+        && settings.providers['opencode-go']?.baseURL === 'https://relay.example/api'
+        && settings.providers.ollama?.enabled === false,
+      JSON.stringify(settings))
+    check('quota settings ignore unknown providers and invalid base URLs',
+      readQuotaSettings(home).providers.openrouter === undefined,
+      JSON.stringify(readQuotaSettings(home)))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+
+  check('quota base URL validation: https/path kept, loopback http allowed, unsafe forms rejected',
+    normalizeQuotaBaseURL('https://relay.example/api/') === 'https://relay.example/api'
+      && normalizeQuotaBaseURL('http://127.0.0.1:11434') === 'http://127.0.0.1:11434'
+      && normalizeQuotaBaseURL('https://user:pass@relay.example') === undefined
+      && normalizeQuotaBaseURL('https://relay.example?x=1') === undefined
+      && normalizeQuotaBaseURL('http://relay.example') === undefined
+      && normalizeQuotaBaseURL('not a url') === undefined,
+    [
+      normalizeQuotaBaseURL('https://relay.example/api/'),
+      normalizeQuotaBaseURL('http://127.0.0.1:11434'),
+      normalizeQuotaBaseURL('https://user:pass@relay.example'),
+      normalizeQuotaBaseURL('http://relay.example'),
+    ].join(' | '))
+  check('quota provider aliases map to the four ids',
+    resolveQuotaProviderId('go') === 'opencode-go'
+      && resolveQuotaProviderId('cc') === 'command-code'
+      && resolveQuotaProviderId('or') === 'openrouter'
+      && resolveQuotaProviderId('ollama-cloud') === 'ollama',
+    ['go', 'cc', 'or', 'ollama-cloud'].map(resolveQuotaProviderId).join(','))
+
+  // A custom base URL is used instead of the official root.
+  const customReplies = new Map<string, Reply>([
+    ['relay.example/api/zen/go/v1/usage', { body: opencodeBody }],
+  ])
+  const customSeen: string[] = []
+  const custom = await fetchQuotaSnapshot(
+    { opencodeGo: 'g' },
+    fetchWith(customReplies, customSeen),
+    () => NOW,
+    { providers: { 'opencode-go': { enabled: true, baseURL: 'https://relay.example/api' } } },
+  )
+  check('custom quota base URL replaces the official root for that provider',
+    custom.providers[0]?.windows.length === 3
+      && customSeen.some(url => url === 'https://relay.example/api/zen/go/v1/usage'),
+    customSeen.join(' '))
+  check('official base constant remains the default',
+    QUOTA_OFFICIAL_BASE.openrouter === 'https://openrouter.ai/api/v1' && customSeen.every(url => !url.includes('opencode.ai')),
+    customSeen.join(' '))
+
+  const disabled = await fetchQuotaSnapshot(
+    { opencodeGo: 'g' },
+    fetchWith(customReplies, customSeen),
+    () => NOW,
+    { providers: { 'opencode-go': { enabled: false } } },
+  )
+  check('a disabled quota provider is not fetched', disabled.providers.length === 0)
+}
+
+{
+  check('/quota subcommands parse: report/status/help/setup/reset/unknown',
+    parseQuotaCommand('').kind === 'report'
+      && parseQuotaCommand('status').kind === 'status'
+      && parseQuotaCommand('help').kind === 'help'
+      && JSON.stringify(parseQuotaCommand('setup go off')) === JSON.stringify({ kind: 'setup', provider: 'go', action: 'off' })
+      && JSON.stringify(parseQuotaCommand('setup openrouter https://relay.example/api')) === JSON.stringify({ kind: 'setup', provider: 'openrouter', action: 'https://relay.example/api' })
+      && JSON.stringify(parseQuotaCommand('reset or')) === JSON.stringify({ kind: 'reset', provider: 'or' })
+      && parseQuotaCommand('bogus').kind === 'unknown',
+    JSON.stringify([
+      parseQuotaCommand(''),
+      parseQuotaCommand('setup go off'),
+      parseQuotaCommand('reset or'),
+      parseQuotaCommand('bogus'),
+    ]))
 }
 
 assert.equal(failures, 0, `${failures} quota check(s) failed`)

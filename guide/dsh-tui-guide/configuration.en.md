@@ -439,6 +439,25 @@ Two directories are involved and neither substitutes for the other:
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.
 
+## `/quota`: subscription quotas and quota endpoints
+
+- `/quota`: fetch and print subscription quotas/usage and refresh the always-on rows beside the ctx/cache line.
+- `/quota status`: show each provider's enabled state, endpoint (official/custom) and key state.
+- `/quota setup <provider> on|off|official|<baseURL>`: set one provider's quota endpoint.
+  - Providers: `ollama` / `opencode-go` / `command-code` / `openrouter` (aliases `go` / `cc` / `or`)
+  - `official`: clear the override and restore the official endpoint
+  - `off` / `on`: stop/resume fetching for that provider (independent of the `statusBar.quota` display switch)
+  - baseURL accepts `https` only; plain `http` is allowed for loopback (`localhost` / `127.0.0.1` / `::1`). Userinfo, query strings and fragments are rejected.
+  - A custom base receives that provider's API key — only point it at a trusted endpoint.
+- `/quota reset [provider]`: restore official endpoints (all or one provider).
+- Settings live in `~/.dsh-tui/quota.json` (0600, enabled state and baseURL only); API keys stay in `~/.dsh/.credentials.yaml`.
+- The fetchers append fixed paths to the base:
+  - `ollama` → `{base}/api/balance`
+  - `opencode-go` → `{base}/zen/go/v1/usage`
+  - `command-code` → `{base}/alpha/...`
+  - `openrouter` → `{base}/key`, `{base}/credits` (official base `https://openrouter.ai/api/v1`)
+- Key refs: `OLLAMA_API_KEY`, `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`, `COMMANDCODE_API_KEY` / `COMMAND_CODE_API_KEY` / `CMD_API_KEY`, `OPENROUTER_API_KEY` (optional `OPENROUTER_MANAGEMENT_KEY`).
+
 ## `/provider`: manage model providers at runtime
 
 `/provider` opens an interactive wizard to add, edit, or delete model

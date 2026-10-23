@@ -1,3 +1,4 @@
+import { QUOTA_OFFICIAL_BASE, quotaBaseURL, quotaEnabled, type QuotaSettings } from './config.js'
 import type {
   QuotaCredits,
   QuotaError,
@@ -9,9 +10,10 @@ import type {
 } from './types.js'
 
 const TIMEOUT_MS = 10_000
-const OLLAMA_BALANCE_URL = 'https://ollama.com/api/balance'
-const OPENCODE_GO_USAGE_URL = 'https://opencode.ai/zen/go/v1/usage'
-const COMMAND_CODE_API = 'https://api.commandcode.ai'
+
+/** Join a configured API root with the provider's fixed relative path. */
+const joinURL = (baseURL: string, path: string): string =>
+  `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
 
 export class QuotaFetchError extends Error {
   constructor(
@@ -82,8 +84,9 @@ async function getJson(url: string, token: string, fetchImpl: typeof fetch): Pro
 export async function fetchOllamaQuota(
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
+  baseURL: string = QUOTA_OFFICIAL_BASE.ollama,
 ): Promise<QuotaProvider> {
-  const body = record(await getJson(OLLAMA_BALANCE_URL, apiKey, fetchImpl))
+  const body = record(await getJson(joinURL(baseURL, 'api/balance'), apiKey, fetchImpl))
   const included = record(body?.included)
   const purchased = record(body?.purchased)
   const balance = number(included?.balance_usd)
@@ -119,8 +122,9 @@ export async function fetchOllamaQuota(
 export async function fetchOpenCodeGoQuota(
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
+  baseURL: string = QUOTA_OFFICIAL_BASE['opencode-go'],
 ): Promise<QuotaProvider> {
-  const body = record(await getJson(OPENCODE_GO_USAGE_URL, apiKey, fetchImpl))
+  const body = record(await getJson(joinURL(baseURL, 'zen/go/v1/usage'), apiKey, fetchImpl))
   const usage = record(body?.usage)
   const windows: QuotaWindow[] = []
   for (const [id, source] of [['five-hour', 'rolling'], ['weekly', 'weekly'], ['monthly', 'monthly']] as const) {
@@ -162,15 +166,16 @@ const planName = (planId: string | undefined): string | undefined => {
 export async function fetchCommandCodeQuota(
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
+  baseURL: string = QUOTA_OFFICIAL_BASE['command-code'],
 ): Promise<QuotaProvider> {
   const query = (orgId: string | undefined): string =>
     orgId === undefined ? '' : `?orgId=${encodeURIComponent(orgId)}`
-  const whoami = record(await getJson(`${COMMAND_CODE_API}/alpha/whoami?limits=1`, apiKey, fetchImpl).catch(() => undefined))
+  const whoami = record(await getJson(`${joinURL(baseURL, 'alpha/whoami')}?limits=1`, apiKey, fetchImpl).catch(() => undefined))
   const org = record(whoami?.org) ?? record(record(whoami?.data)?.org)
   const orgId = text(org?.id)
-  const creditsBody = record(await getJson(`${COMMAND_CODE_API}/alpha/billing/credits${query(orgId)}`, apiKey, fetchImpl))
+  const creditsBody = record(await getJson(`${joinURL(baseURL, 'alpha/billing/credits')}${query(orgId)}`, apiKey, fetchImpl))
   const subscription = record(
-    await getJson(`${COMMAND_CODE_API}/alpha/billing/subscriptions${query(orgId)}`, apiKey, fetchImpl).catch(() => undefined),
+    await getJson(`${joinURL(baseURL, 'alpha/billing/subscriptions')}${query(orgId)}`, apiKey, fetchImpl).catch(() => undefined),
   )
   const creditsRoot = record(creditsBody?.data) ?? creditsBody
   const credits = record(creditsRoot?.credits) ?? creditsRoot
@@ -210,18 +215,16 @@ export async function fetchCommandCodeQuota(
   return { id: 'command-code', label: 'Command Code', ...(plan === undefined ? {} : { plan }), windows, ...(creditView === undefined ? {} : { credits: creditView }) }
 }
 
-const OPENROUTER_KEY_URL = 'https://openrouter.ai/api/v1/key'
-const OPENROUTER_CREDITS_URL = 'https://openrouter.ai/api/v1/credits'
-
 /** OpenRouter's `/key` response (normal key) and `/credits` (management key). */
 export async function fetchOpenRouterQuota(
   apiKey: string,
   managementKey: string = apiKey,
   fetchImpl: typeof fetch = fetch,
+  baseURL: string = QUOTA_OFFICIAL_BASE.openrouter,
 ): Promise<QuotaProvider> {
   const [keyResult, creditsResult] = await Promise.all([
-    getJson(OPENROUTER_KEY_URL, apiKey, fetchImpl).then(body => ({ body }), (error: unknown) => ({ error })),
-    getJson(OPENROUTER_CREDITS_URL, managementKey, fetchImpl).then(body => ({ body }), (error: unknown) => ({ error })),
+    getJson(joinURL(baseURL, 'key'), apiKey, fetchImpl).then(body => ({ body }), (error: unknown) => ({ error })),
+    getJson(joinURL(baseURL, 'credits'), managementKey, fetchImpl).then(body => ({ body }), (error: unknown) => ({ error })),
   ])
   const keyError = 'error' in keyResult ? keyResult.error : undefined
   const creditsError = 'error' in creditsResult ? creditsResult.error : undefined
@@ -300,20 +303,26 @@ export async function fetchQuotaSnapshot(
   keys: QuotaKeys,
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now,
+  settings: QuotaSettings = { providers: {} },
 ): Promise<QuotaSnapshot> {
   const tasks: Promise<QuotaProvider>[] = []
-  if (keys.ollama !== undefined && keys.ollama !== '') {
-    tasks.push(fetchOllamaQuota(keys.ollama, fetchImpl).catch(error => errorProvider('ollama', 'Ollama Cloud', error)))
+  if (keys.ollama !== undefined && keys.ollama !== '' && quotaEnabled(settings, 'ollama')) {
+    tasks.push(fetchOllamaQuota(keys.ollama, fetchImpl, quotaBaseURL(settings, 'ollama')).catch(error => errorProvider('ollama', 'Ollama Cloud', error)))
   }
-  if (keys.opencodeGo !== undefined && keys.opencodeGo !== '') {
-    tasks.push(fetchOpenCodeGoQuota(keys.opencodeGo, fetchImpl).catch(error => errorProvider('opencode-go', 'OpenCode Go', error)))
+  if (keys.opencodeGo !== undefined && keys.opencodeGo !== '' && quotaEnabled(settings, 'opencode-go')) {
+    tasks.push(fetchOpenCodeGoQuota(keys.opencodeGo, fetchImpl, quotaBaseURL(settings, 'opencode-go')).catch(error => errorProvider('opencode-go', 'OpenCode Go', error)))
   }
-  if (keys.commandCode !== undefined && keys.commandCode !== '') {
-    tasks.push(fetchCommandCodeQuota(keys.commandCode, fetchImpl).catch(error => errorProvider('command-code', 'Command Code', error)))
+  if (keys.commandCode !== undefined && keys.commandCode !== '' && quotaEnabled(settings, 'command-code')) {
+    tasks.push(fetchCommandCodeQuota(keys.commandCode, fetchImpl, quotaBaseURL(settings, 'command-code')).catch(error => errorProvider('command-code', 'Command Code', error)))
   }
   const openrouterKey = keys.openrouter ?? keys.openrouterManagement
-  if (openrouterKey !== undefined && openrouterKey !== '') {
-    tasks.push(fetchOpenRouterQuota(openrouterKey, keys.openrouterManagement ?? openrouterKey, fetchImpl).catch(error => errorProvider('openrouter', 'OpenRouter', error)))
+  if (openrouterKey !== undefined && openrouterKey !== '' && quotaEnabled(settings, 'openrouter')) {
+    tasks.push(fetchOpenRouterQuota(
+      openrouterKey,
+      keys.openrouterManagement ?? openrouterKey,
+      fetchImpl,
+      quotaBaseURL(settings, 'openrouter'),
+    ).catch(error => errorProvider('openrouter', 'OpenRouter', error)))
   }
   const providers = await Promise.all(tasks)
   return { providers, fetchedAt: now() }

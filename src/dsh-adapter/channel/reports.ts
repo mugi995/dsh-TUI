@@ -7,6 +7,7 @@ import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import { fetchBalance } from '../../deepseekBalance.js'
 import { fetchQuotaSnapshot } from '../../quota/fetch.js'
+import { readQuotaSettings } from '../../quota/config.js'
 import { resolveQuotaKeys } from '../../quota/keys.js'
 import { t } from '../../i18n.js'
 import { credentialRefDeclared, dshHomeDir } from '../../utils/credentials.js'
@@ -68,7 +69,7 @@ export function createReportActions(ctx: Context, deps: {
       openrouterManagement: await resolveKey('OPENROUTER_MANAGEMENT_KEY') ?? files.openrouterManagement,
     }
     if (!current(capture)) return { providers: [], fetchedAt: Date.now() }
-    return fetchQuotaSnapshot(keys)
+    return fetchQuotaSnapshot(keys, fetch, Date.now, readQuotaSettings())
   }
 
   const mcpStatus = (): string[] => {

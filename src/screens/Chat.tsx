@@ -95,7 +95,22 @@ import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import { formatQuotaReport } from '../quota/report.js'
+import { parseQuotaCommand } from '../quota/command.js'
 import type { QuotaSnapshot } from '../quota/types.js'
+import {
+  QUOTA_KEY_REFS,
+  QUOTA_MANAGEMENT_KEY_REFS,
+  QUOTA_OFFICIAL_BASE,
+  QUOTA_PROVIDER_IDS,
+  QUOTA_PROVIDER_LABELS,
+  normalizeQuotaBaseURL,
+  quotaBaseURL,
+  quotaEnabled,
+  readQuotaSettings,
+  resolveQuotaProviderId,
+  writeQuotaSettings,
+  type QuotaProviderSetting,
+} from '../quota/config.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
@@ -1635,6 +1650,163 @@ export function Chat({
     const timer = setInterval(load, 5 * 60_000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [channel, quotaSettingOn])
+
+  /** `/quota` subcommands: status / setup / reset operate on the separate
+   *  quota settings file (base URL + on/off). Keys stay in the credentials
+   *  store and are only inspected, never written here. */
+  const quotaHelpLines = (): string[] => [
+    t('quota-help-line-query'),
+    t('quota-help-line-status'),
+    t('quota-help-line-setup'),
+    t('quota-help-line-reset'),
+    t('quota-help-providers'),
+  ]
+
+  const quotaKeyState = async (refs: readonly string[]): Promise<string> => {
+    for (const ref of refs) {
+      if ((process.env[ref] ?? '').trim() !== '') return t('quota-key-env', { ref })
+    }
+    const host = channel.providerSetup()
+    if (host === undefined) return t('quota-key-unknown')
+    for (const ref of refs) {
+      if (host.envShadows(ref)) return t('quota-key-env', { ref })
+      try {
+        const value = await host.readCredential(ref)
+        if (value !== undefined && value !== '') return t('quota-key-stored', { ref })
+      } catch { /* fall through to missing */ }
+    }
+    return t('quota-key-missing', { refs: refs.join(' / ') })
+  }
+
+  const quotaStatusLine = async (id: (typeof QUOTA_PROVIDER_IDS)[number]): Promise<string> => {
+    const settings = readQuotaSettings()
+    const base = quotaBaseURL(settings, id)
+    const endpoint = base === QUOTA_OFFICIAL_BASE[id]
+      ? t('quota-endpoint-official')
+      : t('quota-endpoint-custom', { url: base })
+    const key = await quotaKeyState(QUOTA_KEY_REFS[id])
+    const managementRefs = QUOTA_MANAGEMENT_KEY_REFS[id]
+    const management = managementRefs === undefined
+      ? ''
+      : t('quota-key-management', { state: await quotaKeyState(managementRefs) })
+    return t('quota-status-line', {
+      provider: QUOTA_PROVIDER_LABELS[id],
+      state: quotaEnabled(settings, id) ? t('quota-state-on') : t('quota-state-off'),
+      endpoint,
+      key,
+      management,
+    })
+  }
+
+  const runQuotaStatus = async (): Promise<boolean> => {
+    const lines = [t('quota-status-heading')]
+    for (const id of QUOTA_PROVIDER_IDS) lines.push(await quotaStatusLine(id))
+    channel.pushLocal('/quota', lines)
+    return true
+  }
+
+  const runQuotaSetup = async (args: readonly string[]): Promise<boolean> => {
+    const name = args[0]
+    const id = name === undefined ? undefined : resolveQuotaProviderId(name)
+    if (id === undefined) {
+      channel.pushLocal('/quota', [
+        ...(name === undefined ? [] : [t('quota-provider-unknown', { name })]),
+        t('quota-setup-no-provider', { providers: QUOTA_PROVIDER_IDS.join(' / ') }),
+        ...quotaHelpLines(),
+      ])
+      return true
+    }
+    const settings = readQuotaSettings()
+    const action = args[1]
+    if (action === undefined) {
+      channel.pushLocal('/quota', [await quotaStatusLine(id), ...quotaHelpLines()])
+      return true
+    }
+    const previous = settings.providers[id]
+    const lower = action.toLowerCase()
+    let next: QuotaProviderSetting
+    if (lower === 'off' || lower === 'disable') {
+      next = { enabled: false, ...(previous?.baseURL === undefined ? {} : { baseURL: previous.baseURL }) }
+    } else if (lower === 'on' || lower === 'enable') {
+      next = { enabled: true, ...(previous?.baseURL === undefined ? {} : { baseURL: previous.baseURL }) }
+    } else if (lower === 'official' || lower === 'default') {
+      next = { enabled: true }
+    } else {
+      const baseURL = normalizeQuotaBaseURL(action)
+      if (baseURL === undefined) {
+        channel.notify(t('quota-invalid-url', { url: action }), { color: 'error', timeoutMs: 8000 })
+        return true
+      }
+      next = { enabled: true, baseURL }
+    }
+    try {
+      writeQuotaSettings({ providers: { ...settings.providers, [id]: next } })
+    } catch {
+      channel.notify(t('quota-save-failed'), { color: 'error', timeoutMs: 8000 })
+      return true
+    }
+    const endpoint = next.baseURL === undefined
+      ? t('quota-endpoint-official')
+      : t('quota-endpoint-custom', { url: next.baseURL })
+    channel.notify(t('quota-setup-saved', {
+      provider: QUOTA_PROVIDER_LABELS[id],
+      state: next.enabled ? t('quota-state-on') : t('quota-state-off'),
+      endpoint,
+    }), { color: 'success' })
+    runQuota()
+    return true
+  }
+
+  const runQuotaReset = (args: readonly string[]): boolean => {
+    const name = args[0]
+    const id = name === undefined ? undefined : resolveQuotaProviderId(name)
+    if (name !== undefined && id === undefined) {
+      channel.notify(t('quota-provider-unknown', { name }), { color: 'error' })
+      return true
+    }
+    const settings = readQuotaSettings()
+    const providers = { ...settings.providers }
+    if (id === undefined) {
+      for (const key of QUOTA_PROVIDER_IDS) delete providers[key]
+    } else {
+      delete providers[id]
+    }
+    try {
+      writeQuotaSettings({ providers })
+    } catch {
+      channel.notify(t('quota-save-failed'), { color: 'error', timeoutMs: 8000 })
+      return true
+    }
+    channel.notify(id === undefined
+      ? t('quota-reset-all')
+      : t('quota-reset-one', { provider: QUOTA_PROVIDER_LABELS[id] }), { color: 'success' })
+    runQuota()
+    return true
+  }
+
+  const runQuotaCommand = (rawInput: string): Promise<boolean> => {
+    const command = parseQuotaCommand(rawInput)
+    switch (command.kind) {
+      case 'report':
+        runQuota()
+        return Promise.resolve(true)
+      case 'status':
+        return runQuotaStatus()
+      case 'setup':
+        return runQuotaSetup([
+          ...(command.provider === undefined ? [] : [command.provider]),
+          ...(command.action === undefined ? [] : [command.action]),
+        ])
+      case 'reset':
+        return Promise.resolve(runQuotaReset(command.provider === undefined ? [] : [command.provider]))
+      case 'help':
+        channel.pushLocal('/quota', quotaHelpLines())
+        return Promise.resolve(true)
+      case 'unknown':
+        channel.pushLocal('/quota', [t('quota-unknown-subcommand', { name: command.name }), ...quotaHelpLines()])
+        return Promise.resolve(true)
+    }
+  }
   // A side question belongs to its captured session just like a recap. The
   // THREAD stays in memory under its own session id (an archived thread may
   // keep streaming); only the FALLBACK overlay is retired on a binding change
@@ -3710,11 +3882,11 @@ export function Chat({
         return true
       }
       case 'quota': {
-        // Ollama Cloud / OpenCode Go / Command Code subscription quotas:
-        // whatever each account reports becomes a local-output report.
+        // Ollama Cloud / OpenCode Go / Command Code / OpenRouter quotas:
+        // bare /quota fetches and reports; the subcommands manage the quota
+        // base URLs and display the key state.
         setHelpOpen(false)
-        runQuota()
-        return true
+        return runQuotaCommand(rawInput)
       }
       case 'settings': {
         // Plugin settings screen (issue #165): opens immediately; the screen

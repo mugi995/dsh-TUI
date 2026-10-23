@@ -328,7 +328,7 @@ dsh-tui
 | `/status` | 无 | 模型+effort、工作/空闲、会话 id、目录+git 分支、token、缓存命中率、上下文百分比、会话标题 |
 | `/cost` | 无 | token 用量 + 缓存命中率 + 本会话估算（并入子代理）与「主会话/子代理」拆解；非官方/未收录模型只显示 token 并标注未计价（**估算是参考，以平台账单为准**） |
 | `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（同款本会话估算拆解：主会话/子代理/未计价），点击刷新、`×` 关闭 |
-| `/quota` | 无（需 `OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`、`COMMANDCODE_API_KEY`、`OPENROUTER_API_KEY`） | 订阅额度明细：Ollama Cloud（套餐剩余/额度、购买余额）、OpenCode Go（5 小时/周/月百分比）、Command Code（credits + 5 小时/周/月窗口）、OpenRouter（账户 credits / key 限额 / 预算窗口），并立即刷新 ctx/cache 行右侧的常驻额度；只显示各接口实际返回的字段，失败的服务标出原因 |
+| `/quota` | `/quota status` / `/quota setup <provider> on\|off\|official\|<baseURL>` / `/quota reset [provider]` | 订阅额度明细：Ollama Cloud、OpenCode Go、Command Code、OpenRouter；并刷新 ctx/cache 行右侧的常驻额度。`setup` 可设置 quota 专用 baseURL（密钥仍需 credentials/env），`status` 查看端点与密钥状态 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
 | `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
@@ -559,7 +559,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - ctx/cache 行右侧常驻 Ollama Cloud / OpenCode Go / Command Code / OpenRouter 的额度行（`statusBar.quota` 默认开；有数据才显示，极简界面隐藏）。
 - 金额按数值显示（如 `$72.50/$100`）；每个窗口的使用率显示为 `[##########]0%`（10 格、整百分比）。
 - 只显示接口实际返回的字段；某个服务未配置或失败时不占行，详情用 `/quota` 查看。
-- 密钥来自 DSH credentials 或环境变量（`OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY`、`COMMANDCODE_API_KEY`、`OPENROUTER_API_KEY`；OpenRouter 账户余额另需可选的 `OPENROUTER_MANAGEMENT_KEY`，普通 key 只显示 key 限额/预算）；
+- 密钥来自 DSH credentials 或环境变量（`OLLAMA_API_KEY`、`OPENCODE_GO_API_KEY`、`COMMANDCODE_API_KEY`、`OPENROUTER_API_KEY`；OpenRouter 账户余额另需可选的 `OPENROUTER_MANAGEMENT_KEY`，普通 key 只显示 key 限额/预算）；自定义 quota 端点用 `/quota setup <provider> ...`；
   每 5 分钟刷新，`/quota` 会立即刷新并打印明细。
 
 **输入框上边框 — 左：提供方 / 模型 / 思考档、右：cwd**

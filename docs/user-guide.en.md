@@ -364,7 +364,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/status` | none | model+effort, working/idle, session id, dir+git branch, token, cache hit rate, context percentage, session title |
 | `/cost` | none | token usage + cache hit rate + a session estimate (subagent usage included) split into main/subagent; unofficial or unlisted models show tokens only and are marked unpriced (**an estimate — the platform bill is authoritative**) |
 | `/balance` | none | DeepSeek official account balance (free read-only API): summary line + hover detail (same session-estimate split: main/subagent/unpriced), click refresh, `×` close |
-| `/quota` | none (needs `OLLAMA_API_KEY`, `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`, `COMMANDCODE_API_KEY`, `OPENROUTER_API_KEY`) | Subscription quota detail: Ollama Cloud (included balance/allowance, purchased credits), OpenCode Go (5-hour/weekly/monthly percentages), Command Code (credits + 5-hour/weekly windows), OpenRouter (account credits / key limit / budget window), and an immediate refresh of the always-on rows beside the ctx/cache line; prints only fields each API returned and names a failed service instead of hiding the others |
+| `/quota` | `/quota status` / `/quota setup <provider> on\|off\|official\|<baseURL>` / `/quota reset [provider]` | Subscription quota detail for Ollama Cloud, OpenCode Go, Command Code and OpenRouter, plus a refresh of the always-on rows beside the ctx/cache line. `setup` sets a quota-only base URL (keys still come from credentials/env); `status` shows endpoints and key state |
 | `/config` | none | config sources: `cordis.patch.yml` path, launch method, model routing |
 | `/doctor` | none | environment check |
 | `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
@@ -620,7 +620,8 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   `/quota` prints its detail.
 - Keys come from the DSH credentials store or env (`OLLAMA_API_KEY`, `OPENCODE_GO_API_KEY`,
   `COMMANDCODE_API_KEY`, `OPENROUTER_API_KEY`; OpenRouter account credits also accept an optional
-  `OPENROUTER_MANAGEMENT_KEY`, while a normal key shows its key limit/budget only); the rows refresh every five minutes, and `/quota` refreshes immediately.
+  `OPENROUTER_MANAGEMENT_KEY`, while a normal key shows its key limit/budget only); custom quota
+  endpoints use `/quota setup <provider> ...`; the rows refresh every five minutes, and `/quota` refreshes immediately.
 
 **Prompt top border — provider / model / effort (left), cwd (right)**
 
