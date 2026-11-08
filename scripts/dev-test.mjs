@@ -143,6 +143,10 @@ try {
       for (const entry of readdirSync(installed, { recursive: true, withFileTypes: true })) {
         if (!entry.isDirectory()) {
           const path = relative(installed, join(entry.parentPath, entry.name)).replaceAll('\\', '/')
+          // pnpm materializes the dependency tree inside the installed package
+          // directory (real directories for bundled deps' own deps), so files
+          // the tarball never contained are expected under node_modules.
+          if (!expected.has(path) && path.startsWith('node_modules/')) continue
           if (!expected.has(path)) throw new Error(`installed package contains an unpacked file: ${path}`)
         }
       }
