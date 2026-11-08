@@ -149,6 +149,10 @@ type FieldPart = {
   /** Click target (fullscreen mouse): the backend mode segment opens the
    *  /permission picker — the same route the launchpad param row takes. */
   onClick?: () => void
+  /** Flex shrink weight; defaults to 1. 0 protects a field the row must not
+   *  lose under pressure (the model); the long cwd field gives up width
+   *  before the rest. */
+  flexShrink?: number
 }
 
 /**
@@ -175,9 +179,9 @@ function FieldLine({
     <>
       {visible.map((part, index) => (
         <React.Fragment key={part.key}>
-          {index > 0 ? <Text dimColor> · </Text> : null}
+          {index > 0 ? <Text dimColor wrap="truncate"> · </Text> : null}
           <Box
-            flexShrink={1}
+            flexShrink={part.flexShrink ?? 1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
             {...(part.onClick === undefined ? {} : { onClick: part.onClick })}
           >
@@ -1030,3 +1034,4 @@ export function formatSelectionBadge(
   const lines = selection.endLine - selection.startLine + 1
   return `⧉ ${lines} ${lines === 1 ? 'line' : 'lines'} selected`
 }
+

@@ -308,7 +308,7 @@ check('重新开启后标签恢复（右上角）', await settled(() => {
 // ── 1c. 上边框读数的点击：模型段 → /model、思考档段 → /effort ───────────
 // 这两段原来在底栏，点击行为随读数一起搬到了输入框上边框左端。
 {
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 点击前等首帧边框落定
   // 边框坐标：用 `╭` 行本身，而不是全屏首个匹配（启动页也有 `model · effort`
   // 文案，全屏搜索会点到那里）；列号按显示单元算。
   const clickBorder = async (needle: string): Promise<boolean> => {
@@ -318,9 +318,9 @@ check('重新开启后标签恢复（右上角）', await settled(() => {
     if (at < 0) return false
     const col = stringWidth(row.text.slice(0, at))
     stdin.write(`\x1b[<0;${col + 1};${row.y + 1}M`)
-    await sleep(40)
+    await sleep(40) // 固定窗:pacing 鼠标按下与抬起之间的步进
     stdin.write(`\x1b[<0;${col + 1};${row.y + 1}m`)
-    await sleep(40)
+    await sleep(40) // 固定窗:pacing 鼠标按下与抬起之间的步进
     return true
   }
   // 模型段 → 现有的 recently-used 落地页（没有最近使用 → 空提示）。
@@ -330,7 +330,7 @@ check('重新开启后标签恢复（右上角）', await settled(() => {
     JSON.stringify(viewportLines(term).filter(line => line.trim() !== '').slice(-8)))
   // 同一个读数再点一次 = 关掉（与 Esc 等价，不需要回到键盘）。两次点击
   // 拉开 500ms，避开渲染器的双击判定（双击是选词手势，不是第二次 click）。
-  await sleep(600)
+  await sleep(600) // 固定窗:墙钟 避开 500ms 双击判定窗口
   check('再次点击模型段关闭 /model',
     (await clickBorder('deepseek-v4-flash')) && await settled(() => !/暂无/.test(screenText())))
   const effortsBefore = channel.calls.efforts
@@ -340,7 +340,7 @@ check('重新开启后标签恢复（右上角）', await settled(() => {
   const effortsOpened = channel.calls.efforts
   // 再点同一个读数：关闭，而不是重跑 /effort（listEfforts 不再增加）。同样
   // 拉开 500ms，避开双击（选词）判定。
-  await sleep(600)
+  await sleep(600) // 固定窗:墙钟 避开 500ms 双击判定窗口
   check('再次点击思考档段关闭 /effort',
     (await clickBorder('max'))
     && await settled(() => !screenText().includes('推理强度'))
@@ -348,7 +348,7 @@ check('重新开启后标签恢复（右上角）', await settled(() => {
     `efforts=${channel.calls.efforts}`)
   // 提供方段 → 该提供方的模型列表（不是 recents 落地页）。放在最后，
   // 避免它的选择器状态影响上面的开闭断言。
-  await sleep(600)
+  await sleep(600) // 固定窗:墙钟 避开 500ms 双击判定窗口
   check('点击提供方段打开该提供方的模型列表',
     (await clickBorder('deepseek'))
     && await settled(() => screenText().includes('DeepSeek V4 Flash'))
