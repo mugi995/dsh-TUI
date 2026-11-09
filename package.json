@@ -54,6 +54,10 @@
       "types": "./lib/types/working-activity.d.ts",
       "import": "./lib/types/working-activity.js"
     },
+    "./wiz-flash": {
+      "types": "./lib/types/wiz-flash.d.ts",
+      "import": "./lib/types/wiz-flash.js"
+    },
     "./oauth": {
       "types": "./lib/types/oauth.d.ts",
       "import": "./lib/types/oauth.js"
@@ -285,7 +289,8 @@
     "verify:status-fields": "node --import tsx/esm scripts/verify-status-fields.tsx",
     "verify:plugin-field-order": "node --import tsx/esm scripts/verify-plugin-field-order.ts",
     "verify:plugin-field-picker": "node --import tsx/esm scripts/verify-plugin-field-picker.tsx",
-    "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts"
+    "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts",
+    "verify:wiz-flash": "node --import tsx/esm scripts/verify-wiz-flash.mjs"
   },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.287",

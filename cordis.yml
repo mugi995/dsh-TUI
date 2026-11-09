@@ -229,6 +229,11 @@
     publish: false
     publishIntervalMs: 500
 
+# Optional WiZ completion cue. Inert until ~/.dsh-tui/wiz-flash.json or
+# DSH_TUI_WIZ_FLASH=1 opts in; see the README for the LAN/Tailscale modes.
+- id: wiz-flash
+  name: '@deepseek-harness-tui/dsh-tui/wiz-flash'
+
 # Durable session log (DSH's own persistence seam): /resume and rewind both
 # rely on this backend writing every session/event. Root defaults under the
 # user home so sessions survive across terminals (Windows: USERPROFILE).
