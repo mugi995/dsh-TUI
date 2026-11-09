@@ -495,3 +495,11 @@
       config:
         publish: false
         publishIntervalMs: 500
+
+    # Optional completion cue for WiZ bulbs. The row is inert until the user
+    # opts in with ~/.dsh-tui/wiz-flash.json or DSH_TUI_WIZ_FLASH=1; see the
+    # README section. `udp` talks to the bulb's LAN JSON API, while `http`
+    # posts to a `wizctl serve` instance for machines that reach the bulb's
+    # LAN through Tailscale rather than directly.
+    - id: wiz-flash
+      name: '@deepseek-harness-tui/dsh-tui/wiz-flash'

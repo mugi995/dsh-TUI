@@ -19,7 +19,8 @@
     "dsh-tui-webserver",
     "dsh-tui-auth",
     "dsh-tui",
-    "working-activity"
+    "working-activity",
+    "wiz-flash"
   ],
   "configOverrides": [
     "system-prompt",

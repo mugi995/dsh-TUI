@@ -526,6 +526,64 @@ With the DeepSeek brand, Companion skins `deepy` and `whaleGirl` replace the mai
 
 DSH profiles inherit official reporting defaults: DeepSeek API requests carry plugin package identities and incremental Session logs to the configured `baseURL`, including third-party gateways, while OpenTelemetry uploads a Session-log prefix only after explicit feedback. User overrides remain supported; see [reporting settings](docs/configuration.en.md#official-request-metadata-and-feedback-reporting).
 
+### WiZ bulb flash on turn completion (opt-in)
+
+`dst` can flash a WiZ bulb when a top-level turn ends with `completed`.
+Nothing runs until you opt in with `~/.dsh-tui/wiz-flash.json` or
+`DSH_TUI_WIZ_FLASH=1`. Two transports share the same settings:
+
+- **Same LAN (UDP)** — the plugin speaks the bulb's local JSON API on
+  `38899/udp`. Reuse the wizctl files so the bulb's IP and signing key stay in
+  one place:
+
+  ```json
+  {
+    "enabled": true,
+    "mode": "auto",
+    "settingsPath": "/path/to/wizctl/.wizctl/flash.json",
+    "credentialsPath": "/path/to/wizctl/.wizctl/config.json"
+  }
+  ```
+
+  `settingsPath` shares color, target, fade and cooldown with the wizctl Web UI;
+  `credentialsPath` supplies the bulb IP and the `udp_signing_key` that newer
+  firmware requires. Without a registry, set `target` to a MAC (discovery finds
+  the IP) and `key` to the 32-hex signing key.
+
+- **Remote over Tailscale (HTTP)** — on the machine that shares the bulb's LAN,
+  run `python3 -m wizctl serve --web-host <tailscale-ip>`, then point the other
+  machine at it:
+
+  ```json
+  {
+    "enabled": true,
+    "mode": "http",
+    "url": "http://100.x.y.z:8765/api/flash/test",
+    "target": "<bulb-mac>",
+    "color": "#2f6bff",
+    "brightness": 55
+  }
+  ```
+
+  With `target` set, `auto` tries the local LAN first and falls back to HTTP;
+  `http` skips the LAN attempt and flashes immediately. Without a local target,
+  `auto` also uses HTTP directly. The bridge has no authentication, so bind it
+  to Tailscale/LAN only. Instead of binding wizctl itself, you can expose the
+  existing loopback server with `sudo tailscale serve --bg 8765` (root once;
+  `sudo tailscale set --operator=$USER` avoids that afterwards) and use
+  `https://<machine>.<tailnet>.ts.net/api/flash/test`.
+
+  On another machine, install the same `dst` build and create
+  `~/.dsh-tui/wiz-flash.json`. The UDP path needs no Python or wizctl checkout
+  once `target` and `key` are set; the HTTP path only needs `url`.
+
+Environment overrides: `DSH_TUI_WIZ_FLASH` (enable), `..._MODE`, `..._URL`,
+`..._SETTINGS`, `..._CREDENTIALS`, `..._IP`, `..._TARGET`, `..._KEY`,
+`..._PORT`, `..._TIMEOUT_MS`, `..._HTTP_TIMEOUT_MS`, `..._DEBUG`.
+Flash keys in the settings file: `enabled`, `target`, `color`, `brightness`
+(10–100), `fade_ms`, `hold_ms`, `steps` (2–20), `when_off` (`skip`/`flash`),
+`cooldown_ms`.
+
 ## How It Works
 
 ```text

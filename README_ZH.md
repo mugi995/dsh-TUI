@@ -438,6 +438,59 @@ DeepSeek 品牌下，宠物皮肤 `deepy` 或 `whaleGirl` 会取代女仆娘立�
 
 DSH profile 继承官方上报默认：DeepSeek API 请求向配置的 `baseURL`（包括第三方网关）发送插件包身份和增量会话日志，OpenTelemetry 只在显式反馈后上传截至反馈的会话日志。用户仍可覆盖，详见[上报设置](docs/configuration.md#官方请求元数据与反馈上报)。
 
+### 回合完成时的 WiZ 灯泡闪光（可选）
+
+`dst` 可以在顶层回合以 `completed` 结束时让 WiZ 灯泡闪一下。默认不运行；
+创建 `~/.dsh-tui/wiz-flash.json` 或设置 `DSH_TUI_WIZ_FLASH=1` 后才启用。
+两种传输共用同一份设置：
+
+- **同一局域网（UDP）**——直接访问灯泡的本地 JSON API（`38899/udp`）。
+  复用 wizctl 的文件，IP 与签名密钥只需维护一处：
+
+  ```json
+  {
+    "enabled": true,
+    "mode": "auto",
+    "settingsPath": "/path/to/wizctl/.wizctl/flash.json",
+    "credentialsPath": "/path/to/wizctl/.wizctl/config.json"
+  }
+  ```
+
+  `settingsPath` 与 wizctl Web UI 共享颜色、目标、淡入淡出与冷却时间；
+  `credentialsPath` 提供灯泡 IP 和新固件需要的 `udp_signing_key`。没有名册时，
+  把 `target` 写成 MAC（自动发现 IP），`key` 写成 32 位十六进制签名密钥。
+
+- **Tailscale 远程（HTTP）**——在与灯泡同局域网的机器上运行
+  `python3 -m wizctl serve --web-host <tailscale-ip>`，另一台机器指向它：
+
+  ```json
+  {
+    "enabled": true,
+    "mode": "http",
+    "url": "http://100.x.y.z:8765/api/flash/test",
+    "target": "<bulb-mac>",
+    "color": "#2f6bff",
+    "brightness": 55
+  }
+  ```
+
+  设置了 `target` 时，`auto` 先试本地局域网，失败再走 HTTP；`http` 跳过局域网
+  直接闪光。没有本地目标时 `auto` 也会直接走 HTTP。桥接端点没有认证，请只绑定
+  Tailscale/局域网。也可以不绑定 wizctl，改用
+  `sudo tailscale serve --bg 8765` 把现有的回环服务暴露到 tailnet（需要一次
+  root；之后可用 `sudo tailscale set --operator=$USER` 免 root），地址为
+  `https://<machine>.<tailnet>.ts.net/api/flash/test`。
+
+  在另一台机器上安装同一份 `dst`，并创建 `~/.dsh-tui/wiz-flash.json` 即可。
+  UDP 方式只要设置 `target` 和 `key` 就不再需要 Python 或 wizctl 仓库；
+  HTTP 方式只需要 `url`。
+
+环境变量：`DSH_TUI_WIZ_FLASH`（启用）、`..._MODE`、`..._URL`、`..._SETTINGS`、
+`..._CREDENTIALS`、`..._IP`、`..._TARGET`、`..._KEY`、`..._PORT`、`..._TIMEOUT_MS`、
+`..._HTTP_TIMEOUT_MS`、`..._DEBUG`。设置文件中的闪光键：`enabled`、`target`、
+`color`、`brightness`（10–100）、`fade_ms`、`hold_ms`、`steps`（2–20）、
+`when_off`（`skip`/`flash`）、`cooldown_ms`。
+
 ## 工作原理
 
 ```text
