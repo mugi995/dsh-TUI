@@ -48,15 +48,23 @@ async function waitFor(predicate, timeoutMs = 2_000) {
 
 function createContext() {
   const handlers = new Map()
+  const disposers = []
   return {
     ctx: {
       on(event, listener) {
         handlers.set(event, listener)
         return () => handlers.delete(event)
       },
+      logger: { debug: message => console.log(`debug: ${message}`) },
+      effect(setup) {
+        disposers.push(setup())
+      },
     },
     emit(event, ...args) {
       handlers.get(event)?.(...args)
+    },
+    dispose() {
+      for (const dispose of disposers.splice(0)) dispose()
     },
   }
 }
@@ -113,6 +121,22 @@ async function startMockBulb({ signedOnly = false, off = false } = {}) {
       return
     }
     Object.assign(state, message.params)
+    // A real WiZ bulb keeps one light mode at a time: setting a white
+    // temperature clears RGB, and setting RGB clears the temperature.
+    if (message.params.temp !== undefined) {
+      state.r = null
+      state.g = null
+      state.b = null
+      state.sceneId = 0
+    } else if (message.params.r !== undefined || message.params.g !== undefined || message.params.b !== undefined) {
+      state.temp = null
+      state.sceneId = 0
+    } else if (message.params.sceneId !== undefined) {
+      state.r = null
+      state.g = null
+      state.b = null
+      state.temp = null
+    }
     respond({ method: 'setPilot', result: { success: true } })
   })
 
@@ -127,6 +151,23 @@ async function startMockBulb({ signedOnly = false, off = false } = {}) {
 
 async function startHttpBridge() {
   const requests = []
+  const device = {
+    mac: 'aabbccddeeff',
+    alias: 'mock',
+    name: 'Mock bulb',
+    ip: '127.0.0.1',
+    online: true,
+    state: {
+      state: true,
+      is_on: true,
+      dimming: 40,
+      temp: 2_200,
+      scene_id: 0,
+      r: null,
+      g: null,
+      b: null,
+    },
+  }
   const server = createServer((request, response) => {
     let body = ''
     request.on('data', chunk => {
@@ -139,15 +180,46 @@ async function startHttpBridge() {
       } catch {
         // the plugin sends JSON; a malformed body is still a failed assertion
       }
-      requests.push({ url: request.url, body: parsed })
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ ok: true, flashed: true }))
+      const url = request.url ?? ''
+      requests.push({ method: request.method, url, body: parsed })
+      const json = payload => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(payload))
+      }
+
+      if (request.method === 'GET' && url.startsWith('/api/devices')) {
+        json({ devices: [device], count: 1, online: 1 })
+        return
+      }
+      if (request.method === 'POST' && url === '/api/pilot') {
+        const params = parsed.params ?? {}
+        Object.assign(device.state, params)
+        if (params.state !== undefined) device.state.is_on = params.state
+        if (params.temp !== undefined) {
+          device.state.r = null
+          device.state.g = null
+          device.state.b = null
+          device.state.scene_id = 0
+        } else if (params.r !== undefined || params.g !== undefined || params.b !== undefined) {
+          device.state.temp = null
+          device.state.scene_id = 0
+        } else if (params.sceneId !== undefined) {
+          device.state.r = null
+          device.state.g = null
+          device.state.b = null
+          device.state.temp = null
+        }
+        json({ ok: true, results: [{ mac: device.mac, ok: true }] })
+        return
+      }
+      json({ ok: true, flashed: true })
     })
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   return {
     url: `http://127.0.0.1:${server.address().port}/api/flash/test`,
     requests,
+    device,
     close: () => new Promise(resolve => server.close(resolve)),
   }
 }
@@ -174,6 +246,9 @@ const baseConfig = port => ({
   cooldownMs: 0,
   timeoutMs: 500,
 })
+
+const setPilotCalls = bulb => bulb.calls.filter(call => call.method === 'setPilot')
+const lastSetPilot = bulb => setPilotCalls(bulb).at(-1)?.params
 
 try {
   console.log('wiz-flash: UDP fade + restore')
@@ -274,6 +349,140 @@ try {
   const offRestore = offBulb.calls.filter(call => call.method === 'setPilot').at(-1)?.params
   check('whenOff=flash returns the bulb to off', offRestore?.state === false && offRestore?.temp === 2_200)
 
+  console.log('wiz-flash: approval hold (UDP)')
+  const approvalBulb = await startMockBulb()
+  const approval = createContext()
+  apply(approval.ctx, {
+    ...baseConfig(approvalBulb.port),
+    approvalStartDelayMs: 0,
+    approvalMaxMs: 5_000,
+    debug: true,
+    lockPath: join(home, 'approval.lock'),
+  })
+  const askApproval = (context, id) => {
+    context.emit('session/event', session('approval'), { type: 'approval/asked', data: { id, toolName: 'bash' } })
+  }
+  const decideApproval = (context, id, outcome = 'allowed-once') => {
+    context.emit('session/event', session('approval'), { type: 'approval/decided', data: { id, outcome } })
+  }
+
+  askApproval(approval, 'a1')
+  await waitFor(() => setPilotCalls(approvalBulb).some(call => call.params.r === 0x2f && call.params.g === 0x6b && call.params.b === 0xff))
+  check('approval hold sets the bulb blue', lastSetPilot(approvalBulb)?.r === 0x2f)
+  await delay(150)
+  check('the hold stays blue while the prompt is open', lastSetPilot(approvalBulb)?.r === 0x2f)
+
+  const callsBeforeTurnEnd = approvalBulb.calls.length
+  emitCompleted(approval, 'other')
+  await delay(120)
+  check('turn-end flash is suppressed during an approval hold', approvalBulb.calls.length === callsBeforeTurnEnd)
+
+  decideApproval(approval, 'a1')
+  await waitFor(() => lastSetPilot(approvalBulb)?.temp === 2_200)
+  check('approval decision restores the original state', lastSetPilot(approvalBulb)?.temp === 2_200 && lastSetPilot(approvalBulb)?.r === undefined)
+
+  console.log('wiz-flash: multiple approvals')
+  approvalBulb.calls.length = 0
+  askApproval(approval, 'a3')
+  askApproval(approval, 'a4')
+  await waitFor(() => setPilotCalls(approvalBulb).length > 0)
+  decideApproval(approval, 'a3')
+  await delay(150)
+  check('one decision keeps the hold while another is pending', lastSetPilot(approvalBulb)?.r === 0x2f)
+  decideApproval(approval, 'a4', 'rejected')
+  await waitFor(() => lastSetPilot(approvalBulb)?.temp === 2_200)
+  check('the last decision releases the hold', lastSetPilot(approvalBulb)?.temp === 2_200)
+
+  console.log('wiz-flash: approval cleanup')
+  approvalBulb.calls.length = 0
+  askApproval(approval, 'a5')
+  await waitFor(() => setPilotCalls(approvalBulb).length > 0)
+  approval.emit('session/disposed', session('approval'))
+  await waitFor(() => lastSetPilot(approvalBulb)?.temp === 2_200)
+  check('session disposal releases the hold', lastSetPilot(approvalBulb)?.temp === 2_200)
+
+  approvalBulb.calls.length = 0
+  const disposed = createContext()
+  apply(disposed.ctx, {
+    ...baseConfig(approvalBulb.port),
+    approvalStartDelayMs: 0,
+    lockPath: join(home, 'disposed.lock'),
+  })
+  askApproval(disposed, 'dispose')
+  await waitFor(() => setPilotCalls(approvalBulb).some(call => call.params.r === 0x2f))
+  disposed.dispose()
+  await waitFor(() => lastSetPilot(approvalBulb)?.temp === 2_200)
+  check('plugin disposal releases the hold', lastSetPilot(approvalBulb)?.temp === 2_200)
+
+  approvalBulb.calls.length = 0
+  const quick = createContext()
+  apply(quick.ctx, {
+    ...baseConfig(approvalBulb.port),
+    approvalStartDelayMs: 200,
+    approvalMaxMs: 5_000,
+    lockPath: join(home, 'quick.lock'),
+  })
+  askApproval(quick, 'quick')
+  decideApproval(quick, 'quick')
+  await delay(300)
+  check('a quickly auto-answered ask does not flash', setPilotCalls(approvalBulb).length === 0)
+
+  approvalBulb.calls.length = 0
+  const noApproval = createContext()
+  apply(noApproval.ctx, {
+    ...baseConfig(approvalBulb.port),
+    approvalGlow: false,
+    approvalStartDelayMs: 0,
+    lockPath: join(home, 'no-approval.lock'),
+  })
+  askApproval(noApproval, 'a6')
+  await delay(200)
+  check('approvalGlow=false keeps the bulb untouched', setPilotCalls(approvalBulb).length === 0)
+
+  approvalBulb.calls.length = 0
+  const maxHold = createContext()
+  apply(maxHold.ctx, {
+    ...baseConfig(approvalBulb.port),
+    approvalStartDelayMs: 0,
+    approvalMaxMs: 500,
+    lockPath: join(home, 'max-hold.lock'),
+  })
+  askApproval(maxHold, 'a7')
+  await waitFor(() => setPilotCalls(approvalBulb).some(call => call.params.r === 0x2f))
+  await waitFor(() => lastSetPilot(approvalBulb)?.temp === 2_200, 2_000)
+  check('approvalMaxMs releases a stuck hold', lastSetPilot(approvalBulb)?.temp === 2_200)
+
+  console.log('wiz-flash: approval hold (HTTP)')
+  bridge.requests.length = 0
+  const httpApproval = createContext()
+  apply(httpApproval.ctx, {
+    enabled: true,
+    mode: 'http',
+    url: bridge.url,
+    target: 'aabbccddeeff',
+    approvalStartDelayMs: 0,
+    approvalMaxMs: 5_000,
+  })
+  askApproval(httpApproval, 'a8')
+  await waitFor(() => bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.r === 0x2f))
+  check('HTTP approval reads the state through /api/devices', bridge.requests.some(request => request.url?.startsWith('/api/devices')))
+  check('HTTP approval posts the blue hold through /api/pilot', bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.r === 0x2f))
+  decideApproval(httpApproval, 'a8')
+  await waitFor(() => bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.temp === 2_200))
+  check('HTTP approval restores the original state through /api/pilot', bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.temp === 2_200))
+
+  const offApprovalBulb = await startMockBulb({ off: true })
+  const offApproval = createContext()
+  apply(offApproval.ctx, {
+    ...baseConfig(offApprovalBulb.port),
+    approvalWhenOff: 'skip',
+    approvalStartDelayMs: 0,
+    lockPath: join(home, 'off-approval.lock'),
+  })
+  askApproval(offApproval, 'a9')
+  await delay(200)
+  check('approvalWhenOff=skip leaves an off bulb untouched', setPilotCalls(offApprovalBulb).length === 0)
+
   console.log('wiz-flash: lock and on-disk opt-in')
   const busyLock = join(home, 'busy.lock')
   writeFileSync(busyLock, 'other')
@@ -315,6 +524,8 @@ try {
   await bulb.close()
   await signedBulb.close()
   await offBulb.close()
+  await approvalBulb.close()
+  await offApprovalBulb.close()
   await bridge.close()
   rmSync(join(home, '.dsh-tui', 'wiz-flash.json'), { force: true })
   rmSync(settingsFile, { force: true })
