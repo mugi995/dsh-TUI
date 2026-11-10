@@ -953,22 +953,80 @@ async function postBridgePilot(options: ResolvedOptions, target: string, params:
   if (data.ok === false) throw new Error(`wiz-flash: bridge pilot rejected the change: ${text.slice(0, 200)}`)
 }
 
+async function fadeApprovalRestoreUdp(
+  link: BulbLink,
+  state: PilotState,
+  fromRgb: [number, number, number],
+  fromLevel: number,
+  settings: FlashSettings,
+): Promise<void> {
+  const steps = Math.max(2, settings.steps)
+  const stepSleep = Math.max(0, settings.fadeMs) / steps
+  const targetRgb: [number, number, number] = state.on ? endColor(state) : [0, 0, 0]
+  const targetLevel = state.on ? state.dimming ?? 10 : 10
+  try {
+    for (let index = 1; index <= steps; index += 1) {
+      const t = smoothstep(index / steps)
+      const rgb = lerpRgb(fromRgb, targetRgb, t)
+      const level = Math.round(fromLevel + (targetLevel - fromLevel) * t)
+      await link.setPilot({ state: true, r: rgb[0], g: rgb[1], b: rgb[2], dimming: Math.max(10, level) })
+      await sleep(stepSleep)
+    }
+  } catch {
+    // Fall through to the exact restore; a dropped fade frame is not fatal.
+  }
+  await link.setPilot(restoreParams(state))
+}
+
+async function fadeApprovalRestoreHttp(
+  options: ResolvedOptions,
+  target: string,
+  state: PilotState,
+  fromRgb: [number, number, number],
+  fromLevel: number,
+  settings: FlashSettings,
+): Promise<void> {
+  const steps = Math.max(2, settings.steps)
+  const stepSleep = Math.max(0, settings.fadeMs) / steps
+  const targetRgb: [number, number, number] = state.on ? endColor(state) : [0, 0, 0]
+  const targetLevel = state.on ? state.dimming ?? 10 : 10
+  try {
+    for (let index = 1; index <= steps; index += 1) {
+      const t = smoothstep(index / steps)
+      const rgb = lerpRgb(fromRgb, targetRgb, t)
+      const level = Math.round(fromLevel + (targetLevel - fromLevel) * t)
+      await postBridgePilot(options, target, {
+        state: true,
+        r: rgb[0],
+        g: rgb[1],
+        b: rgb[2],
+        dimming: Math.max(10, level),
+      })
+      await sleep(stepSleep)
+    }
+  } catch {
+    // Fall through to the exact restore.
+  }
+  await postBridgePilot(options, target, restoreParams(state))
+}
+
 async function beginUdpApprovalGlow(options: ResolvedOptions, settings: FlashSettings): Promise<ApprovalGlow | undefined> {
   const bulb = await resolveBulb(options, settings)
   const link = new BulbLink(bulb.ip, options.port, bulb.key, options.timeoutMs)
   const state = await link.getPilot()
   if (!state.on && options.approvalWhenOff === 'skip') return undefined
   const rgb = hexToRgb(options.approvalColor)
+  const level = Math.max(10, options.approvalBrightness)
   await link.setPilot({
     state: true,
     r: rgb[0],
     g: rgb[1],
     b: rgb[2],
-    dimming: Math.max(10, options.approvalBrightness),
+    dimming: level,
   })
   return {
     restore: async () => {
-      await link.setPilot(restoreParams(state))
+      await fadeApprovalRestoreUdp(link, state, rgb, level, settings)
     },
   }
 }
@@ -986,17 +1044,18 @@ async function beginHttpApprovalGlow(options: ResolvedOptions, settings: FlashSe
   const state = parsePilot(device.state)
   if (!state.on && options.approvalWhenOff === 'skip') return undefined
   const rgb = hexToRgb(options.approvalColor)
+  const level = Math.max(10, options.approvalBrightness)
   const pilotTarget = device.mac || target
   await postBridgePilot(options, pilotTarget, {
     state: true,
     r: rgb[0],
     g: rgb[1],
     b: rgb[2],
-    dimming: Math.max(10, options.approvalBrightness),
+    dimming: level,
   })
   return {
     restore: async () => {
-      await postBridgePilot(options, pilotTarget, restoreParams(state))
+      await fadeApprovalRestoreHttp(options, pilotTarget, state, rgb, level, settings)
     },
   }
 }
@@ -1105,6 +1164,7 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
 
   const approvalPending = new Map<string, string>()
   let approvalGlow: ApprovalGlow | undefined
+  let approvalRestores = 0
   let approvalGeneration = 0
   let approvalSuppressed = false
   let approvalStartTimer: NodeJS.Timeout | undefined
@@ -1142,12 +1202,15 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
     const glow = approvalGlow
     approvalGlow = undefined
     if (glow !== undefined) {
+      approvalRestores += 1
       enqueueApproval(async () => {
         try {
           await glow.restore()
         } catch (error) {
           const options = safeOptions()
           if (options !== undefined) debug(ctx, options, `approval restore failed (${reason}): ${messageOf(error)}`)
+        } finally {
+          approvalRestores -= 1
         }
       })
     }
@@ -1177,10 +1240,13 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
         if (glow === undefined) return
 
         if (generation !== approvalGeneration || approvalPending.size === 0) {
+          approvalRestores += 1
           try {
             await glow.restore()
           } catch {
             // best effort: the approval was decided while the state was read
+          } finally {
+            approvalRestores -= 1
           }
           return
         }
@@ -1212,8 +1278,9 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
 
   const trigger = (): void => {
     // An approval is a blocking notification; a turn-completion flash must
-    // not repaint the bulb underneath the held approval color.
-    if (approvalPending.size > 0 || approvalGlow !== undefined) return
+    // not repaint the bulb underneath the held approval color or its
+    // fade-out.
+    if (approvalPending.size > 0 || approvalGlow !== undefined || approvalRestores > 0) return
 
     const options = safeOptions()
     if (options === undefined || !options.enabled || !options.turnEndFlash) return

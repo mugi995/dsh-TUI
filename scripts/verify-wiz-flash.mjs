@@ -483,6 +483,49 @@ try {
   await delay(200)
   check('approvalWhenOff=skip leaves an off bulb untouched', setPilotCalls(offApprovalBulb).length === 0)
 
+  console.log('wiz-flash: approval off fade')
+  const offGlowBulb = await startMockBulb({ off: true })
+  const offGlow = createContext()
+  apply(offGlow.ctx, {
+    ...baseConfig(offGlowBulb.port),
+    approvalWhenOff: 'flash',
+    approvalStartDelayMs: 0,
+    fadeMs: 40,
+    steps: 4,
+    lockPath: join(home, 'off-glow.lock'),
+  })
+  askApproval(offGlow, 'a10')
+  await waitFor(() => setPilotCalls(offGlowBulb).some(call => call.params.r === 0x2f))
+  decideApproval(offGlow, 'a10')
+  await waitFor(() => lastSetPilot(offGlowBulb)?.state === false)
+  const offFrames = setPilotCalls(offGlowBulb).filter(call => call.params.state === true)
+  check('off approval restore fades blue down before switching off', offFrames.length >= 5 && offFrames.at(-1)?.params.dimming < 55)
+  check('off approval restore ends with state=false', lastSetPilot(offGlowBulb)?.state === false)
+
+  console.log('wiz-flash: HTTP approval off fade')
+  bridge.device.state.state = false
+  bridge.device.state.is_on = false
+  bridge.requests.length = 0
+  const httpOff = createContext()
+  apply(httpOff.ctx, {
+    enabled: true,
+    mode: 'http',
+    url: bridge.url,
+    target: 'aabbccddeeff',
+    approvalWhenOff: 'flash',
+    approvalStartDelayMs: 0,
+    fadeMs: 40,
+    steps: 4,
+    approvalMaxMs: 5_000,
+  })
+  askApproval(httpOff, 'http-off')
+  await waitFor(() => bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.r === 0x2f))
+  decideApproval(httpOff, 'http-off')
+  await waitFor(() => bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.state === false))
+  const httpPilotFrames = bridge.requests.filter(request => request.url === '/api/pilot' && request.body.params?.state === true)
+  check('HTTP off approval restore fades down before switching off', httpPilotFrames.length >= 5)
+  check('HTTP off approval restore ends with state=false', bridge.requests.some(request => request.url === '/api/pilot' && request.body.params?.state === false))
+
   console.log('wiz-flash: lock and on-disk opt-in')
   const busyLock = join(home, 'busy.lock')
   writeFileSync(busyLock, 'other')
@@ -526,6 +569,7 @@ try {
   await offBulb.close()
   await approvalBulb.close()
   await offApprovalBulb.close()
+  await offGlowBulb.close()
   await bridge.close()
   rmSync(join(home, '.dsh-tui', 'wiz-flash.json'), { force: true })
   rmSync(settingsFile, { force: true })
