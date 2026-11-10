@@ -485,6 +485,19 @@ DSH profile 继承官方上报默认：DeepSeek API 请求向配置的 `baseURL`
   UDP 方式只要设置 `target` 和 `key` 就不再需要 Python 或 wizctl 仓库；
   HTTP 方式只需要 `url`。
 
+  如果 `dst --dump-config` 的合成树里没有 `wiz-flash` 行，说明全局 `dsh-tui`
+  启动器早于这份构建：dsh 会先从安装锚点解析 bundle patch，再找 profile。
+  把下面这段加到 profile 层（`~/.dsh/profiles/dsh-tui/cordis.patch.yml`），
+  然后在 TUI 里 `/restart`：
+
+  ```yaml
+  - insert:
+      - id: wiz-flash
+        name: '@deepseek-harness-tui/dsh-tui/wiz-flash'
+  ```
+
+  全局启动器也带上同一行之后，可以删掉 profile 里的这段，保留一份即可。
+
 #### 审批等待时的常亮
 
 DSH 的权限提示等待用户决定时，插件让灯泡保持蓝色而不是闪一下。它跟踪
