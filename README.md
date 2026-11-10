@@ -577,6 +577,20 @@ Nothing runs until you opt in with `~/.dsh-tui/wiz-flash.json` or
   `~/.dsh-tui/wiz-flash.json`. The UDP path needs no Python or wizctl checkout
   once `target` and `key` are set; the HTTP path only needs `url`.
 
+  If `dst --dump-config` does not list a `wiz-flash` row, the global `dsh-tui`
+  launcher predates this build: dsh resolves bundle patches from the
+  installation anchor before the profile. Add the row to the profile layer
+  (`~/.dsh/profiles/dsh-tui/cordis.patch.yml`) and run `/restart` in the TUI:
+
+  ```yaml
+  - insert:
+      - id: wiz-flash
+        name: '@deepseek-harness-tui/dsh-tui/wiz-flash'
+  ```
+
+  Remove the profile row once the global launcher ships the same row; one row
+  is enough.
+
 #### Approval hold
 
 When a DSH permission prompt is waiting, the plugin holds the bulb blue
