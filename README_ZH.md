@@ -485,11 +485,28 @@ DSH profile 继承官方上报默认：DeepSeek API 请求向配置的 `baseURL`
   UDP 方式只要设置 `target` 和 `key` 就不再需要 Python 或 wizctl 仓库；
   HTTP 方式只需要 `url`。
 
+#### 审批等待时的常亮
+
+DSH 的权限提示等待用户决定时，插件让灯泡保持蓝色而不是闪一下。它跟踪
+DSH 的 `approval/asked` / `approval/decided` 审计对，直到最后一个排队审批
+结束才恢复；允许、拒绝、取消、会话销毁、插件卸载或 `approvalMaxMs`
+（默认 10 分钟）都会触发恢复。`approvalStartDelayMs`（默认 200）用于跳过
+立即自动应答的请求，避免无意义的闪烁。
+
+插件启用后 `approvalGlow` 默认 `true`；`approvalColor` / `approvalBrightness`
+默认沿用闪光设置；`approvalWhenOff` 默认 `flash`（设为 `skip` 则熄灯时不亮）。
+只想保留审批常亮时设 `turnEndFlash: false`。HTTP 方式通过 wizctl 桥的
+`/api/devices` 读取状态、`/api/pilot` 写入，因此桥必须运行且灯泡在线。
+
 环境变量：`DSH_TUI_WIZ_FLASH`（启用）、`..._MODE`、`..._URL`、`..._SETTINGS`、
 `..._CREDENTIALS`、`..._IP`、`..._TARGET`、`..._KEY`、`..._PORT`、`..._TIMEOUT_MS`、
-`..._HTTP_TIMEOUT_MS`、`..._DEBUG`。设置文件中的闪光键：`enabled`、`target`、
-`color`、`brightness`（10–100）、`fade_ms`、`hold_ms`、`steps`（2–20）、
-`when_off`（`skip`/`flash`）、`cooldown_ms`。
+`..._HTTP_TIMEOUT_MS`、`..._DEBUG`、`..._TURN_END`、`..._APPROVAL`、
+`..._APPROVAL_COLOR`、`..._APPROVAL_BRIGHTNESS`、`..._APPROVAL_WHEN_OFF`、
+`..._APPROVAL_MAX_MS`、`..._APPROVAL_DELAY_MS`。设置文件中的闪光键：`enabled`、
+`target`、`color`、`brightness`（10–100）、`fade_ms`、`hold_ms`、`steps`（2–20）、
+`when_off`（`skip`/`flash`）、`cooldown_ms`；审批键：`turnEndFlash`、
+`approvalGlow`、`approvalColor`、`approvalBrightness`、`approvalWhenOff`、
+`approvalMaxMs`、`approvalStartDelayMs`。
 
 ## 工作原理
 

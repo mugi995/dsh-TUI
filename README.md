@@ -577,12 +577,33 @@ Nothing runs until you opt in with `~/.dsh-tui/wiz-flash.json` or
   `~/.dsh-tui/wiz-flash.json`. The UDP path needs no Python or wizctl checkout
   once `target` and `key` are set; the HTTP path only needs `url`.
 
+#### Approval hold
+
+When a DSH permission prompt is waiting, the plugin holds the bulb blue
+instead of flashing it. It follows DSH's `approval/asked` / `approval/decided`
+audit pair, keeps the color until the last queued approval resolves, and
+restores the captured state on allow, reject, cancel, session disposal,
+plugin unload, or `approvalMaxMs` (default 10 minutes). `approvalStartDelayMs`
+(default 200) avoids a glow for asks that are auto-answered immediately.
+
+`approvalGlow` defaults to `true` once the plugin is enabled;
+`approvalColor`/`approvalBrightness` default to the flash values;
+`approvalWhenOff` defaults to `flash` (use `skip` to leave an off bulb off).
+Set `turnEndFlash: false` to keep only the approval hold. Over HTTP the hold
+reads `/api/devices` and writes through `/api/pilot` on the wizctl bridge,
+so the bridge must be running and the bulb online.
+
 Environment overrides: `DSH_TUI_WIZ_FLASH` (enable), `..._MODE`, `..._URL`,
 `..._SETTINGS`, `..._CREDENTIALS`, `..._IP`, `..._TARGET`, `..._KEY`,
-`..._PORT`, `..._TIMEOUT_MS`, `..._HTTP_TIMEOUT_MS`, `..._DEBUG`.
+`..._PORT`, `..._TIMEOUT_MS`, `..._HTTP_TIMEOUT_MS`, `..._DEBUG`,
+`..._TURN_END`, `..._APPROVAL`, `..._APPROVAL_COLOR`,
+`..._APPROVAL_BRIGHTNESS`, `..._APPROVAL_WHEN_OFF`, `..._APPROVAL_MAX_MS`,
+`..._APPROVAL_DELAY_MS`.
 Flash keys in the settings file: `enabled`, `target`, `color`, `brightness`
 (10–100), `fade_ms`, `hold_ms`, `steps` (2–20), `when_off` (`skip`/`flash`),
-`cooldown_ms`.
+`cooldown_ms`. Approval keys: `turnEndFlash`, `approvalGlow`, `approvalColor`,
+`approvalBrightness`, `approvalWhenOff`, `approvalMaxMs`,
+`approvalStartDelayMs`.
 
 ## How It Works
 

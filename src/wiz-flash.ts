@@ -50,6 +50,13 @@ export interface WizFlashConfig {
   lockPath?: string
   debug?: boolean
   requireLiveStart?: boolean
+  turnEndFlash?: boolean
+  approvalGlow?: boolean
+  approvalColor?: string
+  approvalBrightness?: number
+  approvalWhenOff?: WhenOff
+  approvalMaxMs?: number
+  approvalStartDelayMs?: number
 }
 
 interface FlashSettings {
@@ -80,6 +87,13 @@ interface ResolvedOptions {
   lockPath: string
   debug: boolean
   requireLiveStart: boolean
+  turnEndFlash: boolean
+  approvalGlow: boolean
+  approvalColor: string
+  approvalBrightness: number
+  approvalWhenOff: WhenOff
+  approvalMaxMs: number
+  approvalStartDelayMs: number
   settings: FlashSettings
 }
 
@@ -114,7 +128,11 @@ interface SessionLike {
 
 interface SessionEventLike {
   type?: string
-  data?: { reason?: string | { kind?: string } }
+  data?: {
+    reason?: string | { kind?: string }
+    id?: string
+    outcome?: string
+  }
 }
 
 /** The Cordis surface this plugin uses (kept minimal for offline tests). */
@@ -122,6 +140,12 @@ export interface WizFlashContext {
   on(event: 'session/event', listener: (session: SessionLike | undefined, event: SessionEventLike | undefined) => void): () => void
   on(event: 'session/disposed', listener: (session: SessionLike | undefined) => void): () => void
   logger?: { debug?: (message: string) => void }
+  /**
+   * Cordis effect registration. The returned disposer restores a held
+   * approval glow when the TUI unmounts; hosts without `effect` simply
+   * skip that best-effort cleanup.
+   */
+  effect?(setup: () => () => void): void
 }
 
 const CONFIG_FILE = join(DATA_DIR, 'wiz-flash.json')
@@ -145,6 +169,13 @@ const DEFAULT_OPTIONS: Omit<ResolvedOptions, 'settings'> = {
   lockPath: DEFAULT_LOCK,
   debug: false,
   requireLiveStart: false,
+  turnEndFlash: true,
+  approvalGlow: true,
+  approvalColor: DEFAULT_COLOR,
+  approvalBrightness: 55,
+  approvalWhenOff: 'flash',
+  approvalMaxMs: 600_000,
+  approvalStartDelayMs: 200,
 }
 
 const DEFAULT_SETTINGS: FlashSettings = {
@@ -284,6 +315,13 @@ function resolveOptions(config: WizFlashConfig): ResolvedOptions {
   if (env.DSH_TUI_WIZ_FLASH_TIMEOUT_MS !== undefined) source.timeoutMs = env.DSH_TUI_WIZ_FLASH_TIMEOUT_MS
   if (env.DSH_TUI_WIZ_FLASH_HTTP_TIMEOUT_MS !== undefined) source.httpTimeoutMs = env.DSH_TUI_WIZ_FLASH_HTTP_TIMEOUT_MS
   if (env.DSH_TUI_WIZ_FLASH_DEBUG !== undefined) source.debug = env.DSH_TUI_WIZ_FLASH_DEBUG
+  if (env.DSH_TUI_WIZ_FLASH_TURN_END !== undefined) source.turnEndFlash = env.DSH_TUI_WIZ_FLASH_TURN_END
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL !== undefined) source.approvalGlow = env.DSH_TUI_WIZ_FLASH_APPROVAL
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL_COLOR !== undefined) source.approvalColor = env.DSH_TUI_WIZ_FLASH_APPROVAL_COLOR
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL_BRIGHTNESS !== undefined) source.approvalBrightness = env.DSH_TUI_WIZ_FLASH_APPROVAL_BRIGHTNESS
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL_WHEN_OFF !== undefined) source.approvalWhenOff = env.DSH_TUI_WIZ_FLASH_APPROVAL_WHEN_OFF
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL_MAX_MS !== undefined) source.approvalMaxMs = env.DSH_TUI_WIZ_FLASH_APPROVAL_MAX_MS
+  if (env.DSH_TUI_WIZ_FLASH_APPROVAL_DELAY_MS !== undefined) source.approvalStartDelayMs = env.DSH_TUI_WIZ_FLASH_APPROVAL_DELAY_MS
 
   const settingsPath = expandHomePath(asString(source.settingsPath))
   let credentialsPath = expandHomePath(asString(source.credentialsPath))
@@ -315,6 +353,13 @@ function resolveOptions(config: WizFlashConfig): ResolvedOptions {
     lockPath: expandHomePath(asString(source.lockPath) || DEFAULT_OPTIONS.lockPath),
     debug: asBoolean(source.debug, false),
     requireLiveStart: asBoolean(source.requireLiveStart, false),
+    turnEndFlash: asBoolean(source.turnEndFlash ?? source.turn_end_flash, true),
+    approvalGlow: asBoolean(source.approvalGlow ?? source.approval_glow, true),
+    approvalColor: normalizeColor(source.approvalColor ?? source.approval_color, settings.color),
+    approvalBrightness: clamp(Math.round(asNumber(source.approvalBrightness ?? source.approval_brightness, settings.brightness)), 10, 100),
+    approvalWhenOff: asString(source.approvalWhenOff ?? source.approval_when_off).toLowerCase() === 'skip' ? 'skip' : 'flash',
+    approvalMaxMs: clamp(Math.round(asNumber(source.approvalMaxMs ?? source.approval_max_ms, 600_000)), 500, 3_600_000),
+    approvalStartDelayMs: clamp(Math.round(asNumber(source.approvalStartDelayMs ?? source.approval_start_delay_ms, 200)), 0, 5_000),
     settings,
   }
 }
@@ -579,13 +624,13 @@ function parsePilot(result: JsonObject | undefined): PilotState {
   return {
     raw,
     mac: normalizeMac(raw.mac) || undefined,
-    on: state === true || state === 1 || state === '1',
+    on: state === true || state === 1 || state === '1' || raw.is_on === true,
     dimming: numberOrUndefined(raw.dimming),
     temp: numberOrUndefined(raw.temp),
     r: numberOrUndefined(raw.r),
     g: numberOrUndefined(raw.g),
     b: numberOrUndefined(raw.b),
-    sceneId: numberOrUndefined(raw.sceneId) ?? 0,
+    sceneId: numberOrUndefined(raw.sceneId ?? raw.scene_id) ?? 0,
     speed: numberOrUndefined(raw.speed),
   }
 }
@@ -818,6 +863,185 @@ async function flashHttp(options: ResolvedOptions, settings: FlashSettings): Pro
   return data
 }
 
+/** A bulb as reported by the wizctl HTTP bridge. */
+interface BridgeDevice {
+  mac: string
+  alias: string
+  name: string
+  ip: string
+  online: boolean
+  state?: JsonObject
+}
+
+/** A held approval glow; restore() puts the captured state back. */
+interface ApprovalGlow {
+  restore: () => Promise<void>
+}
+
+function bridgeEndpoint(url: string, endpoint: 'devices' | 'pilot'): string {
+  const parsed = new URL(url)
+  if (/\/api\/flash\/test\/?$/u.test(parsed.pathname)) {
+    parsed.pathname = parsed.pathname.replace(/\/api\/flash\/test\/?$/u, `/api/${endpoint}`)
+  } else {
+    parsed.pathname = `/api/${endpoint}`
+  }
+  parsed.search = ''
+  return parsed.toString()
+}
+
+async function fetchBridgeDevices(options: ResolvedOptions): Promise<BridgeDevice[]> {
+  const response = await fetch(bridgeEndpoint(options.url, 'devices'), {
+    signal: AbortSignal.timeout(options.httpTimeoutMs),
+  })
+  const text = await response.text()
+  let data: JsonObject = {}
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (isObject(parsed)) data = parsed
+  } catch {
+    // reported below
+  }
+  if (!response.ok) throw new Error(`wiz-flash: bridge devices HTTP ${response.status}: ${text.slice(0, 200)}`)
+  const raw = Array.isArray(data.devices) ? data.devices : []
+  return raw.flatMap(item => {
+    if (!isObject(item)) return []
+    return [{
+      mac: normalizeMac(item.mac),
+      alias: asString(item.alias),
+      name: asString(item.name),
+      ip: asString(item.ip),
+      online: item.online === true,
+      state: isObject(item.state) ? item.state : undefined,
+    }]
+  })
+}
+
+function findBridgeDevice(devices: BridgeDevice[], target: string): BridgeDevice | undefined {
+  const wantedMac = normalizeMac(target)
+  if (wantedMac !== '') {
+    const match = devices.find(device => device.mac === wantedMac)
+    if (match !== undefined) return match
+  }
+  const wanted = target.toLowerCase()
+  if (wanted !== '') {
+    const match = devices.find(device => {
+      return device.alias.toLowerCase() === wanted
+        || device.name.toLowerCase() === wanted
+        || device.ip === target
+    })
+    if (match !== undefined) return match
+  }
+  return devices.length === 1 ? devices[0] : undefined
+}
+
+async function postBridgePilot(options: ResolvedOptions, target: string, params: JsonObject): Promise<void> {
+  const response = await fetch(bridgeEndpoint(options.url, 'pilot'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target, params }),
+    signal: AbortSignal.timeout(options.httpTimeoutMs),
+  })
+  const text = await response.text()
+  let data: JsonObject = {}
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (isObject(parsed)) data = parsed
+  } catch {
+    // reported below
+  }
+  if (!response.ok) throw new Error(`wiz-flash: bridge pilot HTTP ${response.status}: ${text.slice(0, 200)}`)
+  if (data.ok === false) throw new Error(`wiz-flash: bridge pilot rejected the change: ${text.slice(0, 200)}`)
+}
+
+async function beginUdpApprovalGlow(options: ResolvedOptions, settings: FlashSettings): Promise<ApprovalGlow | undefined> {
+  const bulb = await resolveBulb(options, settings)
+  const link = new BulbLink(bulb.ip, options.port, bulb.key, options.timeoutMs)
+  const state = await link.getPilot()
+  if (!state.on && options.approvalWhenOff === 'skip') return undefined
+  const rgb = hexToRgb(options.approvalColor)
+  await link.setPilot({
+    state: true,
+    r: rgb[0],
+    g: rgb[1],
+    b: rgb[2],
+    dimming: Math.max(10, options.approvalBrightness),
+  })
+  return {
+    restore: async () => {
+      await link.setPilot(restoreParams(state))
+    },
+  }
+}
+
+async function beginHttpApprovalGlow(options: ResolvedOptions, settings: FlashSettings): Promise<ApprovalGlow | undefined> {
+  const devices = await fetchBridgeDevices(options)
+  const target = settings.target || options.target
+  const device = findBridgeDevice(devices, target)
+  if (device === undefined) {
+    throw new Error('wiz-flash: approval glow needs a target when the bridge reports multiple bulbs')
+  }
+  if (!device.online) throw new Error(`wiz-flash: bridge reports ${device.mac || target} offline`)
+  if (device.state === undefined) throw new Error('wiz-flash: bridge did not report the bulb state')
+
+  const state = parsePilot(device.state)
+  if (!state.on && options.approvalWhenOff === 'skip') return undefined
+  const rgb = hexToRgb(options.approvalColor)
+  const pilotTarget = device.mac || target
+  await postBridgePilot(options, pilotTarget, {
+    state: true,
+    r: rgb[0],
+    g: rgb[1],
+    b: rgb[2],
+    dimming: Math.max(10, options.approvalBrightness),
+  })
+  return {
+    restore: async () => {
+      await postBridgePilot(options, pilotTarget, restoreParams(state))
+    },
+  }
+}
+
+async function beginApprovalGlow(
+  options: ResolvedOptions,
+  settings: FlashSettings,
+  cache: { transport?: Transport },
+): Promise<ApprovalGlow | undefined> {
+  if (options.mode === 'http') return beginHttpApprovalGlow(options, settings)
+  if (options.mode === 'udp') return beginUdpApprovalGlow(options, settings)
+  if (cache.transport === 'http') return beginHttpApprovalGlow(options, settings)
+  if (cache.transport === 'udp') {
+    try {
+      return await beginUdpApprovalGlow(options, settings)
+    } catch (error) {
+      if (options.url === '') throw error
+      const glow = await beginHttpApprovalGlow(options, settings)
+      cache.transport = 'http'
+      return glow
+    }
+  }
+
+  const localHint = options.ip !== ''
+    || options.credentialsPath !== ''
+    || settings.target !== ''
+    || options.target !== ''
+  if (options.url !== '' && !localHint) {
+    const glow = await beginHttpApprovalGlow(options, settings)
+    cache.transport = 'http'
+    return glow
+  }
+
+  try {
+    const glow = await beginUdpApprovalGlow(options, settings)
+    cache.transport = 'udp'
+    return glow
+  } catch (error) {
+    if (options.url === '') throw error
+    const glow = await beginHttpApprovalGlow(options, settings)
+    cache.transport = 'http'
+    return glow
+  }
+}
+
 async function runFlash(options: ResolvedOptions, settings: FlashSettings, cache: { transport?: Transport }): Promise<JsonObject> {
   if (options.mode === 'http') return flashHttp(options, settings)
   if (options.mode === 'udp') return flashUdp(options, settings)
@@ -864,23 +1088,135 @@ function debug(ctx: WizFlashContext, options: ResolvedOptions, message: string):
   }
 }
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
- * Mount the turn-completion flash. The row is always safe to load: with no
- * opt-in configuration it registers two listeners that return immediately.
+ * Mount the turn-completion flash and the approval hold. The row is always
+ * safe to load: with no opt-in configuration both features return
+ * immediately, and the approval hold is a no-op until DSH logs its audit
+ * pair.
  */
 export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
   const liveStarts = new Set<string>()
   const cache: { transport?: Transport } = {}
   let lastFlashAt = 0
 
-  const trigger = (): void => {
-    let options: ResolvedOptions
+  const approvalPending = new Map<string, string>()
+  let approvalGlow: ApprovalGlow | undefined
+  let approvalGeneration = 0
+  let approvalSuppressed = false
+  let approvalStartTimer: NodeJS.Timeout | undefined
+  let approvalMaxTimer: NodeJS.Timeout | undefined
+  let approvalQueue: Promise<void> = Promise.resolve()
+
+  const safeOptions = (): ResolvedOptions | undefined => {
     try {
-      options = resolveOptions(config)
+      return resolveOptions(config)
     } catch {
-      return
+      return undefined
     }
-    if (!options.enabled) return
+  }
+
+  const enqueueApproval = (operation: () => Promise<void>): void => {
+    approvalQueue = approvalQueue.then(operation, operation)
+  }
+
+  /**
+   * Stop the current hold and fence any in-flight start. The generation bump
+   * is what makes a late `beginApprovalGlow` restore its own just-applied
+   * color instead of leaking it after a quick approval.
+   */
+  const endApprovalCycle = (reason: string): void => {
+    approvalGeneration += 1
+    if (approvalStartTimer !== undefined) {
+      clearTimeout(approvalStartTimer)
+      approvalStartTimer = undefined
+    }
+    if (approvalMaxTimer !== undefined) {
+      clearTimeout(approvalMaxTimer)
+      approvalMaxTimer = undefined
+    }
+
+    const glow = approvalGlow
+    approvalGlow = undefined
+    if (glow !== undefined) {
+      enqueueApproval(async () => {
+        try {
+          await glow.restore()
+        } catch (error) {
+          const options = safeOptions()
+          if (options !== undefined) debug(ctx, options, `approval restore failed (${reason}): ${messageOf(error)}`)
+        }
+      })
+    }
+    if (approvalPending.size === 0) approvalSuppressed = false
+  }
+
+  const beginApprovalCycle = (): void => {
+    approvalGeneration += 1
+    const generation = approvalGeneration
+    const options = safeOptions()
+    if (options === undefined || !options.enabled || !options.approvalGlow) return
+
+    if (approvalStartTimer !== undefined) clearTimeout(approvalStartTimer)
+    approvalStartTimer = setTimeout(() => {
+      approvalStartTimer = undefined
+      enqueueApproval(async () => {
+        if (generation !== approvalGeneration) return
+        if (approvalPending.size === 0 || approvalGlow !== undefined) return
+
+        let glow: ApprovalGlow | undefined
+        try {
+          glow = await beginApprovalGlow(options, options.settings, cache)
+        } catch (error) {
+          debug(ctx, options, `approval glow failed: ${messageOf(error)}`)
+          return
+        }
+        if (glow === undefined) return
+
+        if (generation !== approvalGeneration || approvalPending.size === 0) {
+          try {
+            await glow.restore()
+          } catch {
+            // best effort: the approval was decided while the state was read
+          }
+          return
+        }
+
+        approvalGlow = glow
+        if (approvalMaxTimer !== undefined) clearTimeout(approvalMaxTimer)
+        approvalMaxTimer = setTimeout(() => {
+          approvalMaxTimer = undefined
+          approvalSuppressed = true
+          endApprovalCycle('max-duration')
+        }, options.approvalMaxMs)
+      })
+    }, options.approvalStartDelayMs)
+  }
+
+  const noteApprovalAsked = (id: string, sessionId: string): void => {
+    if (id === '' || approvalPending.has(id)) return
+    const wasEmpty = approvalPending.size === 0
+    approvalPending.set(id, sessionId)
+    if (!wasEmpty) return
+    if (approvalSuppressed) return
+    beginApprovalCycle()
+  }
+
+  const noteApprovalDecided = (id: string): void => {
+    if (!approvalPending.delete(id)) return
+    if (approvalPending.size === 0) endApprovalCycle('decided')
+  }
+
+  const trigger = (): void => {
+    // An approval is a blocking notification; a turn-completion flash must
+    // not repaint the bulb underneath the held approval color.
+    if (approvalPending.size > 0 || approvalGlow !== undefined) return
+
+    const options = safeOptions()
+    if (options === undefined || !options.enabled || !options.turnEndFlash) return
 
     const now = Date.now()
     const cooldown = options.settings.cooldownMs ?? options.cooldownMs
@@ -888,23 +1224,49 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
     lastFlashAt = now
 
     void runFlash(options, options.settings, cache).catch(error => {
-      debug(ctx, options, error instanceof Error ? error.message : String(error))
+      debug(ctx, options, messageOf(error))
     })
   }
 
   ctx.on('session/disposed', session => {
-    if (session?.id !== undefined) liveStarts.delete(String(session.id))
+    const sessionId = session?.id === undefined ? '' : String(session.id)
+    if (sessionId !== '') liveStarts.delete(sessionId)
+    if (sessionId === '') return
+
+    let removed = false
+    for (const [id, owner] of approvalPending) {
+      if (owner !== sessionId) continue
+      approvalPending.delete(id)
+      removed = true
+    }
+    if (removed && approvalPending.size === 0) endApprovalCycle('session-disposed')
   })
 
   ctx.on('session/event', (session, event) => {
     if (session === undefined || event === undefined) return
+    const sessionId = session.id === undefined ? '' : String(session.id)
+
+    // DSH's approval service appends this audit pair for every ask,
+    // including explicit rejections and cancellations. The pair is the
+    // stable, log-only signal that a prompt is waiting for the user.
+    if (event.type === 'approval/asked') {
+      const id = asString(event.data?.id)
+      if (id !== '') noteApprovalAsked(id, sessionId)
+      return
+    }
+    if (event.type === 'approval/decided') {
+      const id = asString(event.data?.id)
+      if (id !== '') noteApprovalDecided(id)
+      return
+    }
+
     if (event.type === 'turn/start') {
-      if (session.id !== undefined) liveStarts.add(String(session.id))
+      if (sessionId !== '') liveStarts.add(sessionId)
       return
     }
     if (event.type !== 'turn/end') return
 
-    const live = session.id === undefined ? false : liveStarts.delete(String(session.id))
+    const live = sessionId === '' ? false : liveStarts.delete(sessionId)
     if (!live && asBoolean(config.requireLiveStart, false)) return
     if (session.header?.origin === 'subagent') return
     if ((session.header?.delegationDepth ?? 0) > 0) return
@@ -913,6 +1275,13 @@ export function apply(ctx: WizFlashContext, config: WizFlashConfig = {}): void {
     const kind = typeof reason === 'string' ? reason : reason?.kind
     if (kind !== 'completed') return
     trigger()
+  })
+
+  ctx.effect?.(() => () => {
+    // Unloading the plugin (TUI exit or a live reload) must not leave the
+    // bulb held on the approval color.
+    approvalSuppressed = true
+    endApprovalCycle('dispose')
   })
 }
 
